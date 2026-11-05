@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Walk Schedule</title>
+  <!-- Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- PDF export: jsPDF and the AutoTable plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <!-- Walker View map: Leaflet -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <link rel="stylesheet" href="./css/CBMW-Walk-Scheduler.css" />
+</head>
+
+<body>
+  <!-- Leader View: the leader enters their email. They can then act only on walks they own (temporary, until proper sign-in) -->
+  <div id="leader-identify" class="leader-identify" hidden>
+    <label for="leader-email">I am</label>
+    <input id="leader-email" type="email" placeholder="Your email address" aria-label="Your email address" autocomplete="email" />
+    <span id="leader-identify-msg" aria-live="polite" hidden></span>
+  </div>
+
+  <!-- ======================================================= HEADER ======================================================= -->
+  <header class="page-header">
+    <img class="page-logo" src="data:image/png;base64,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" alt="Costa Blanca Mountain Walkers logo" />
+    <h1 id="page-title">Walk Programme</h1>
+    <p id="page-instruction">Click on a slot to schedule or edit a walk.</p>
+  </header>
+  <!-- ======================================================= VIEW TOGGLE ======================================================= -->
+  <div class="view-toggle-container">
+    <div class="view-segment" role="radiogroup" aria-label="View mode">
+      <input type="radio" name="viewMode" id="view-walker" value="walker" checked />
+      <label for="view-walker">Walker View</label>
+      <input type="radio" name="viewMode" id="view-leader" value="leader" />
+      <label for="view-leader">Leader View</label>
+      <input type="radio" name="viewMode" id="view-admin" value="admin" />
+      <label for="view-admin">Admin View</label>
+    </div>
+  </div>
+  <!-- ======================================================= WALKER MODE HEADER (Walker View only) ======================================================= -->
+  <div class="walker-mode-header" id="walker-mode-header">
+    <div class="walker-mode-switch" role="group" aria-label="Walker calendar mode">
+      <button type="button" class="walker-mode-btn" data-walker-mode-btn="month" aria-pressed="false">Month</button>
+      <button type="button" class="walker-mode-btn" data-walker-mode-btn="picker" aria-pressed="true">List</button>
+      <button type="button" class="walker-mode-btn" data-walker-mode-btn="map" aria-pressed="false">Map</button>
+    </div>
+    <button type="button" class="picker-open-btn" id="picker-open-btn" aria-expanded="false" aria-controls="picker-column">
+      <span>Date:</span> <span id="picker-open-label">All upcoming</span> <span aria-hidden="true">&#9662;</span>
+    </button>
+    <div class="walker-day-picker" id="walker-day-picker" hidden>
+      <label for="walker-day-input">Date</label>
+      <input type="date" id="walker-day-input" />
+    </div>
+  </div>
+  <!-- ======================================================= WALKER MAP (Walker View, Map mode) ======================================================= -->
+  <div class="walker-map" id="walker-map" hidden>
+    <p class="walker-map-note" id="walker-map-note" aria-live="polite"></p>
+    <div id="walker-map-canvas" role="region" aria-label="Map of walk meeting points"></div>
+  </div>
+  <!-- ======================================================= CALENDAR ======================================================= -->
+  <!-- ======================================================= LEADER LAYOUT TOGGLE (Leader View only) ======================================================= -->
+  <div class="leader-layout-header" id="leader-layout-header">
+    <div class="walker-mode-switch" role="group" aria-label="Leader layout">
+      <button type="button" class="walker-mode-btn" data-leader-layout="stacked" aria-pressed="true">Calendar</button>
+      <button type="button" class="walker-mode-btn" data-leader-layout="picker" aria-pressed="false">List</button>
+    </div>
+  </div>
+  <div class="split-layout">
+  <!-- ======================================================= PICKER COLUMN (Walker View, Picker mode) ======================================================= -->
+  <aside class="picker-column" id="picker-column" aria-label="Pick a date">
+    <div class="picker-head">
+      <span class="picker-heading">Pick a date</span>
+      <button type="button" class="nav-btn" id="picker-clear">All upcoming</button>
+      <button type="button" class="picker-close" id="picker-close" aria-label="Close date picker">&times;</button>
+    </div>
+    <div class="picker-weekdays" aria-hidden="true"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+    <div class="picker-months" id="picker-months"></div>
+  </aside>
+  <div class="calendar-container">
+    <div class="calendar-header">
+      <div class="calendar-title-row">
+        <button type="button" class="nav-btn month-arrow" id="prev-month" aria-label="Previous month">&larr;</button>
+        <h2 id="calendar-title">Month Year</h2>
+        <button type="button" class="nav-btn month-arrow" id="next-month" aria-label="Next month">&rarr;</button>
+      </div>
+      <div class="calendar-tools-group">
+        <div class="walker-calendar-tools">
+          <label for="walker-goto-month" class="walker-only">Go to month</label>
+          <input type="month" id="walker-goto-month" class="walker-only" />
+          <button type="button" class="nav-btn" id="calendar-collapse" aria-expanded="true">Hide calendar</button>
+        </div>
+      <div class="legend-wrap">
+        <button type="button" class="legend-link" aria-label="Grade legend" aria-describedby="grade-legend">
+          <span class="legend-swatches" aria-hidden="true">
+            <span style="background: var(--color-E)"></span>
+            <span style="background: var(--color-M)"></span>
+            <span style="background: var(--color-MS)"></span>
+            <span style="background: var(--color-S)"></span>
+            <span style="background: var(--color-VS)"></span>
+          </span>
+        </button>
+        <div class="legend-container" id="grade-legend" role="tooltip">
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--color-E)"></div>
+            E · Easy
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--color-M)"></div>
+            M · Moderate
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--color-MS)"></div>
+            MS · Moderately Strenuous
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--color-S)"></div>
+            S · Strenuous
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--color-VS)"></div>
+            VS · Very Strenuous
+          </div>
+          <button type="button" class="walk-levels-link" data-open-levels>Full walk levels, scrambling and terrain</button>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div class="calendar-sandwich">
+      <button type="button" class="month-side month-side-prev" aria-label="Previous month">&larr;</button>
+      <div class="calendar-grid-wrap">
+      <div class="weekdays">
+        <div>Sun</div>
+        <div>Mon</div>
+        <div>Tue</div>
+        <div>Wed</div>
+        <div>Thu</div>
+        <div>Fri</div>
+        <div>Sat</div>
+      </div>
+      <div class="days-grid" id="days-grid"></div>
+      </div>
+      <button type="button" class="month-side month-side-next" aria-label="Next month">&rarr;</button>
+    </div>
+  </div>
+  <!-- ======================================================= ADMIN ======================================================= -->
+  <div class="admin-container" id="admin-container">
+    <div class="preview-banner" id="preview-banner" hidden>Preview: this is how the walks will look to walkers. Drafts are shown with their status and are not visible to walkers. Nothing can be changed here.</div>
+    <section id="walk-messages-pane" class="msg-pane" aria-label="Requests and messages">
+      <button type="button" class="msg-pane-toggle" id="msg-pane-toggle" aria-expanded="false" aria-controls="msg-pane-body">
+        <span class="msg-pane-title">Requests and messages</span>
+        <span class="msg-pane-count" id="msg-pane-count"></span>
+        <span class="msg-pane-chev" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="msg-pane-body" id="msg-pane-body" hidden>
+        <div class="msg-pane-bar">
+          <div class="msg-chips" role="group" aria-label="Filter by status">
+            <button type="button" class="msg-chip" data-msg-status="open" aria-pressed="true">Open</button>
+            <button type="button" class="msg-chip" data-msg-status="done" aria-pressed="false">Done</button>
+            <button type="button" class="msg-chip" data-msg-status="all" aria-pressed="false">All</button>
+          </div>
+          <label class="msg-type-wrap"><span class="visually-hidden">Filter by type</span>
+            <select id="msg-type-filter">
+              <option value="">All types</option>
+              <option value="date">Change date</option>
+              <option value="time">Change time</option>
+              <option value="leader">Change leader</option>
+              <option value="walk">Change walk</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-small btn-primary" id="msg-new-btn">New request</button>
+        </div>
+        <form id="msg-form" class="msg-form" hidden>
+          <div class="msg-form-grid">
+            <label>Type
+              <select id="msg-type" required>
+                <option value="date">Change date</option>
+                <option value="time">Change time</option>
+                <option value="leader">Change leader</option>
+                <option value="walk">Change walk</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label>Walk
+              <select id="msg-walk" required></select>
+            </label>
+            <label>Proposed date (optional)
+              <input type="date" id="msg-date" />
+            </label>
+            <label>Proposed time (optional)
+              <input type="time" id="msg-time" />
+            </label>
+          </div>
+          <label class="msg-full">Request
+            <textarea id="msg-text" rows="3" required maxlength="600" placeholder="e.g. Please move this walk to Sunday 15 Nov because of the fiesta"></textarea>
+          </label>
+          <div class="msg-form-actions">
+            <button type="button" class="btn btn-small" id="msg-cancel">Cancel</button>
+            <button type="submit" class="btn btn-small btn-primary">Send request</button>
+          </div>
+        </form>
+        <div id="msg-list" class="msg-list"></div>
+      </div>
+    </section>
+    <section id="booking-requests-panel" hidden style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 16px; margin:0 0 16px">
+      <h3 style="margin:0 0 4px">Change requests from leaders <span class="muted" id="booking-requests-count"></span></h3>
+      <div id="booking-requests-list"></div>
+    </section>
+    <div class="admin-header">
+      <h3 id="walk-offers-title">Upcoming Walks</h3>
+      <span class="header-filter-badge" id="header-filter-badge" hidden></span>
+      <!-- Zone 1: primary actions -->
+      <div class="wo-zone wo-zone-primary">
+        <button class="btn btn-success" id="add-walk-to-schedule" hidden>Add Walk</button>
+        <button class="btn btn-success" id="add-social-event" hidden>Add Event</button>
+        <button class="btn" id="preview-walker-btn" aria-pressed="false" hidden>Preview</button>
+      </div>
+
+      <!-- Zone 2: data management -->
+      <div class="wo-zone wo-zone-data">
+        <div class="legend-wrap picker-legend-wrap">
+      <button type="button" class="legend-link" aria-label="Grade legend" aria-describedby="picker-grade-legend">
+        <span class="legend-swatches" aria-hidden="true">
+          <span style="background: var(--color-E)"></span>
+          <span style="background: var(--color-M)"></span>
+          <span style="background: var(--color-MS)"></span>
+          <span style="background: var(--color-S)"></span>
+          <span style="background: var(--color-VS)"></span>
+        </span>
+      </button>
+      <div class="legend-container" id="picker-grade-legend" role="tooltip">
+        <div class="legend-item"><div class="legend-dot" style="background: var(--color-E)"></div>E · Easy</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--color-M)"></div>M · Moderate</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--color-MS)"></div>MS · Moderately Strenuous</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--color-S)"></div>S · Strenuous</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--color-VS)"></div>VS · Very Strenuous</div>
+        <button type="button" class="walk-levels-link" data-open-levels>Full walk levels, scrambling and terrain</button>
+      </div>
+    </div>
+        <button class="btn btn-success" id="export-pdf">Download</button>
+        <button class="btn btn-success" id="export-csv" hidden>Export to CSV</button>
+        <label class="past-walks-toggle" id="past-walks-label" hidden><input type="checkbox" id="past-walks-check" /> Show past walks</label>
+        <button class="btn btn-danger" id="clear-all" hidden>Clear All Bookings</button>
+      </div>
+
+      <span id="draft-count" hidden style="font-size:0.9rem; background:#fef3c7; color:#92400e; padding:2px 10px; border-radius:999px; font-weight:600; margin-left:8px; align-self:center"></span>
+    </div>
+    <div class="walk-offers-body">
+      <!-- Zone 3: filters (collapsible; the count stays visible when closed) -->
+      <div class="wo-zone wo-zone-filters" id="filters-zone">
+        <div class="filters-bar">
+          <button type="button" class="filters-state" id="filters-state" aria-expanded="true" aria-controls="walker-filters" data-active="false">
+            <span class="filters-state-label">Filters</span>
+            <span class="filters-state-chev" aria-hidden="true">&#9662;</span>
+          </button>
+          <div class="table-filters" id="walker-filters">
+      <div class="filter-field grow walker-search-field">
+        <label for="admin-filter-search">Search</label>
+        <input type="search" id="admin-filter-search" placeholder="Search all columns" />
+      </div>
+      <div class="filter-field">
+        <label for="admin-filter-grade">Grade</label>
+        <select id="admin-filter-grade">
+          <option value="ALL">All grades</option>
+          <option value="E">E</option>
+          <option value="M">M</option>
+          <option value="MS">MS</option>
+          <option value="S">S</option>
+          <option value="VS">VS</option>
+          <option value="SUMMER">Summer walks</option>
+        </select>
+      </div>
+      <div class="filter-field hide-in-walker">
+        <label for="admin-filter-leader">Leader</label>
+        <select id="admin-filter-leader"><option value="ALL">All leaders</option></select>
+      </div>
+      <div class="filter-field hide-in-walker">
+        <label for="admin-filter-pueblo">Pueblo</label>
+        <select id="admin-filter-pueblo"><option value="ALL">All pueblos</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="admin-filter-status">Status</label>
+        <select id="admin-filter-status">
+          <option value="ALL">All statuses</option>
+          <option value="live">Published</option>
+          <option value="draft">Draft</option>
+        </select>
+      </div>
+      <div class="filter-field walker-date-filter" id="admin-filter-date-field" hidden>
+        <label>Date</label>
+        <div class="walker-date-value">
+          <span id="admin-filter-date">All dates</span>
+          <button type="button" class="nav-btn" id="admin-filter-date-clear" hidden>Clear date</button>
+        </div>
+      </div>
+      <div class="filter-field walker-date-range">
+        <label for="admin-filter-from">From</label>
+        <input type="date" id="admin-filter-from" title="Show walks on or after this date" />
+      </div>
+      <div class="filter-field walker-date-range">
+        <label for="admin-filter-to">To</label>
+        <input type="date" id="admin-filter-to" title="Show walks on or before this date" />
+      </div>
+          </div>
+          <div class="filter-clear-group">
+            <span class="filter-count" id="admin-filter-count"></span>
+            <button type="button" class="nav-btn" id="admin-filter-clear">Clear filters</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="offers-table">
+        <thead>
+          <tr>
+            <th class="expand-column" aria-label="Expand walk details"></th>
+            <th class="admin-sortable-header" data-admin-sort="date" tabindex="0">Date <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header" data-admin-sort="walk_grade" tabindex="0">Grade <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header walkid-col" data-admin-sort="walk_number" tabindex="0">Walk Number <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header" data-admin-sort="walk_name" tabindex="0">Name of Walk <span class="sort-indicator">↕</span></th>
+            <th class="walker-only-col" hidden>Description</th>
+            <th class="walker-image-col" data-label="Photo">Photo</th>
+            <th class="admin-sortable-header hide-in-walker" data-admin-sort="leader_name" tabindex="0">Leader <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header hide-in-walker" data-admin-sort="pueblo" tabindex="0">Pueblo <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header hide-in-walker" data-admin-sort="comments" tabindex="0">Comments <span class="sort-indicator">↕</span></th>
+            <th class="admin-sortable-header notes-col" data-admin-sort="notes" tabindex="0">Notes <span class="sort-indicator">↕</span></th>
+            <th class="action-cancel-head">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="admin-table-body"></tbody>
+      </table>
+    </div>
+    </div>
+  </div>
+  </div><!-- /split-layout -->
+  <!-- =======================================================
+     STATISTICS DASHBOARD
+     ======================================================= -->
+
+  <div class="stats-container collapsible-container collapsed" id="statistics-dashboard" hidden>
+    <!-- MAIN STATISTICS HEADER -->
+
+    <div class="stats-header collapsible-header">
+      <div>
+        <h3>Programme Stats Dashboard</h3>
+
+        <p style="margin: 5px 0 0; color: var(--text-muted)">
+          Statistics for the scheduled walk programme
+        </p>
+      </div>
+
+      <button type="button" class="collapse-button" aria-label="Collapse statistics dashboard">
+        <span class="collapse-icon"> ⌃ </span>
+      </button>
+    </div>
+
+    <!-- MAIN STATISTICS CONTENT -->
+
+    <div class="collapsible-content">
+      <!-- =================================================
+             PUEBLO FILTER
+             ================================================= -->
+
+      <div class="stats-filter">
+        <label for="pueblo-filter"> Filter statistics by Pueblo </label>
+
+        <select id="pueblo-filter">
+          <option value="ALL">All Pueblos</option>
+        </select>
+      </div>
+
+      <!-- =================================================
+             STACKED STATISTIC CARDS
+             ================================================= -->
+
+      <div class="stats-summary">
+        <div class="stat-card total-card">
+          <div class="stat-label">Total Walks</div>
+
+          <div class="stat-value" id="stat-total">0</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">E — Easy</div>
+
+          <div class="stat-value" style="color: var(--color-E)" id="stat-E">
+            0
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">M — Moderate</div>
+
+          <div class="stat-value" style="color: var(--color-M)" id="stat-M">
+            0
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">MS — Moderately Strenuous</div>
+
+          <div class="stat-value" style="color: var(--color-MS)" id="stat-MS">
+            0
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">S — Strenuous</div>
+
+          <div class="stat-value" style="color: var(--color-S)" id="stat-S">
+            0
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">VS — Very Strenuous</div>
+
+          <div class="stat-value" style="color: var(--color-VS)" id="stat-VS">
+            0
+          </div>
+        </div>
+      </div>
+      <!-- =================================================
+             RAW WALK DATA
+             ================================================= -->
+
+      <div class="stats-section collapsible-container" id="walk-data-section">
+        <div class="stats-section-header collapsible-header">
+          <div class="stats-section-title">
+            <h4>Overview of Scheduled Walks</h4>
+
+            <p>
+              <span id="stats-count"> 0 </span>
+
+              walks shown — click a heading to sort
+            </p>
+          </div>
+
+          <button type="button" class="collapse-button" aria-label="Collapse walk data">
+            <span class="collapse-icon"> ⌃ </span>
+          </button>
+        </div>
+
+        <div class="stats-section-content collapsible-content">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th class="sortable-header" data-sort="walk_number">
+                    Walk #
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th class="sortable-header" data-sort="date">
+                    Date
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th class="sortable-header" data-sort="time">
+                    Time
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th class="sortable-header" data-sort="walk_grade">
+                    Grade
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th class="sortable-header" data-sort="leader_name">
+                    Leader
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th class="sortable-header" data-sort="pueblo">
+                    Pueblo
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody id="stats-data-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <!-- =================================================
+             MONTHLY CHART
+             ================================================= -->
+
+      <div class="stats-section collapsible-container" id="monthly-stats-section">
+        <div class="stats-section-header collapsible-header">
+          <div class="stats-section-title">
+            <h4>Walks Scheduled by Month & Grade</h4>
+
+            <p>Monthly distribution of walking grades</p>
+          </div>
+
+          <button type="button" class="collapse-button" aria-label="Collapse monthly chart">
+            <span class="collapse-icon"> ⌃ </span>
+          </button>
+        </div>
+
+        <div class="stats-section-content collapsible-content">
+          <div class="chart-container">
+            <canvas id="monthlyChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================
+             LEADER TABLE
+             ================================================= -->
+
+      <div class="stats-section collapsible-container" id="leader-stats-section">
+        <div class="stats-section-header collapsible-header">
+          <div class="stats-section-title">
+            <h4>Walks Scheduled by Leader & Grade</h4>
+          </div>
+
+          <button type="button" class="collapse-button" aria-label="Collapse leader statistics">
+            <span class="collapse-icon"> ⌃ </span>
+          </button>
+        </div>
+
+        <div class="stats-section-content collapsible-content">
+          <div class="table-wrapper">
+            <table class="leader-table">
+              <thead>
+                <tr>
+                  <th data-leader-sort="leader">
+                    Leader
+                    <span class="sort-indicator"> ↑ </span>
+                  </th>
+
+                  <th data-leader-sort="E" style="text-align: center">
+                    E
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th data-leader-sort="M" style="text-align: center">
+                    M
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th data-leader-sort="MS" style="text-align: center">
+                    MS
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th data-leader-sort="S" style="text-align: center">
+                    S
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th data-leader-sort="VS" style="text-align: center">
+                    VS
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+
+                  <th data-leader-sort="total" style="text-align: center">
+                    Total
+                    <span class="sort-indicator"> ↕ </span>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody id="leader-stats-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- ======================================================= WALKER DETAIL CARD (click) ======================================================= -->
+  <div class="detail-overlay" id="detail-overlay">
+    <div class="detail-card" id="detail-card" role="dialog" aria-modal="true" aria-labelledby="detail-title"></div>
+  </div>
+  <!-- ======================================================= WALKER HOVER CARD (hover) ======================================================= -->
+  <div class="hover-card" id="hover-card" hidden></div>
+  <!-- ======================================================= BOOKING MODAL ======================================================= -->
+  <div class="modal-overlay" id="booking-modal">
+    <div class="modal-content">
+      <h3 id="modal-heading">Book Walk Slot</h3>
+      <form id="kv-booking-form">
+        <!-- 1. The Hidden Value Input -->
+        <input type="hidden" id="modalHiddenValue" name="uniqueId" value="">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="input-date"> Selected Date <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="text" id="input-date" readonly />
+            </div>
+            <div class="form-group half-mobile">
+              <label for="input-start-time"> Start Time <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="time" id="input-start-time" value="10:00" required />
+            </div>
+            <div class="form-group half-mobile">
+              <label for="input-grade"> Walk Grade </label>
+              <select id="input-grade">
+                <option value="E">E</option>
+                <option value="M">M</option>
+                <option value="MS">MS</option>
+                <option value="S">S</option>
+                <option value="VS">VS</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="input-walk-no"> Walk Number <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="text" id="input-walk-no" required list="master-walk-options" placeholder="Enter or choose a Walk ID" autocomplete="off" />
+              <datalist id="master-walk-options"></datalist>
+            </div>
+            <div class="form-group span-4">
+              <label for="input-walk-name"> Name of Walk </label>
+              <input type="text" id="input-walk-name" required maxlength="100" placeholder="e.g. Pego Marshes Circular" />
+            </div>
+            <div class="form-group span-3">
+              <label for="input-leader"> Leader 1 <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="text" id="input-leader" required list="leader-options" autocomplete="off"
+                placeholder="Type a leader's name" />
+              <datalist id="leader-options"></datalist>
+              <div id="leader-details" class="leader-details"></div>
+            </div>
+            <div class="form-group span-3">
+              <label for="input-leader-2"> Leader 2 </label>
+              <input type="text" id="input-leader-2" list="leader-options" autocomplete="off"
+                placeholder="Optional second leader" />
+            </div>
+            <div class="form-group span-3">
+              <label for="input-pueblo"> Pueblo </label>
+              <input type="text" id="input-pueblo" placeholder="e.g. Pego" />
+            </div>
+            <div class="form-group span-3">
+              <label for="input-comments"> Programme Comments </label>
+              <textarea id="input-comments" rows="3"
+                placeholder="For the programme, e.g. optional lunch, walking pace (not in the walk description)"></textarea>
+            </div>
+            <div class="form-group span-3">
+              <label for="input-notes"> Notes for the Programme Team </label>
+              <textarea id="input-notes" rows="3"
+                placeholder="Anything helpful for the team creating the programme"></textarea>
+            </div>
+          </div>
+          <section class="modified-panel" id="modified-panel" hidden>
+            <h4>Published walk changes</h4>
+            <label class="modified-check"><input type="checkbox" id="input-modified" /> Mark as modified (walkers see a notice)</label>
+            <div class="form-group span-3"><label for="input-modified-note">What changed (shown to walkers)</label><textarea id="input-modified-note" rows="2" placeholder="e.g. Meeting time moved to 9:30"></textarea></div>
+          </section>
+          <section class="override-panel" id="override-panel" hidden>
+            <h4>Adjust for this booking only</h4>
+            <p class="override-note">Empty fields use the master walk. Changes to the master walk still apply to any field left empty here.</p>
+            <div class="override-grid">
+              <div class="form-group"><label for="ov-Distance">Distance</label><input id="ov-Distance" type="text" /></div>
+              <div class="form-group"><label for="ov-Ascent">Ascent</label><input id="ov-Ascent" type="text" /></div>
+              <div class="form-group"><label for="ov-Total_Time">Total time</label><input id="ov-Total_Time" type="text" /></div>
+              <div class="form-group"><label for="ov-Terrain">Terrain</label><input id="ov-Terrain" type="text" /></div>
+              <div class="form-group"><label for="ov-Scr">SCR</label><input id="ov-Scr" type="text" /></div>
+              <div class="form-group"><label for="ov-Dogs">Dogs</label><input id="ov-Dogs" type="text" /></div>
+              <div class="form-group"><label for="ov-Latitude">Meeting point latitude</label><input id="ov-Latitude" type="text" inputmode="decimal" /></div>
+              <div class="form-group"><label for="ov-Longitude">Meeting point longitude</label><input id="ov-Longitude" type="text" inputmode="decimal" /></div>
+              <div class="form-group span-3"><label for="ov-Route_Description">Route description</label><textarea id="ov-Route_Description" rows="2"></textarea></div>
+              <div class="form-group span-3"><label for="ov-Directions">Driving directions</label><textarea id="ov-Directions" rows="2"></textarea></div>
+            </div>
+            <div class="override-actions"><button type="button" class="btn btn-secondary" id="override-reset">Reset to master</button></div>
+          </section>
+          <section class="walk-master-panel" aria-live="polite">
+  
+            <div id="walk-master-details"><p class="walk-details-empty">Enter or select a Walk Number to load the master route details.</p></div>
+          </section>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="close-modal">
+            Cancel
+          </button>
+          <button type="submit" class="btn btn-primary" id="submit-booking">
+            Submit
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <!-- ======================================================= SOCIAL EVENT MODAL (Admin View only) ======================================================= -->
+  <div class="modal-overlay" id="pdf-modal">
+    <div class="modal-content">
+      <h3>Export walks to PDF</h3>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-group span-3">
+            <label for="pdf-from">From</label>
+            <input type="date" id="pdf-from" />
+          </div>
+          <div class="form-group span-3">
+            <label for="pdf-to">To</label>
+            <input type="date" id="pdf-to" />
+          </div>
+          <p id="pdf-count" style="grid-column: 1 / -1; margin: 0; color: #64748b; font-size: 0.9rem"></p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="pdf-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="pdf-submit">Export PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="social-modal">
+    <div class="modal-content">
+      <h3 id="social-heading">Add Event</h3>
+      <form id="social-form">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group" style="grid-column: 1 / -1">
+              <label for="social-type"> Type </label>
+              <select id="social-type">
+                <option value="social">Social event</option>
+                <option value="summer">Summer programme walk</option>
+              </select>
+            </div>
+            <div class="form-group span-3">
+              <label for="social-date"> Date <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="date" id="social-date" required />
+            </div>
+            <div class="form-group span-3">
+              <label for="social-start-time"> Start Time <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="time" id="social-start-time" required />
+            </div>
+            <div class="form-group" style="grid-column: 1 / -1">
+              <label for="social-title"> Event Title <span class="required-mark" aria-hidden="true">*</span></label>
+              <input type="text" id="social-title" required maxlength="100" placeholder="e.g. Autumn Potluck Supper / Breakfast Walk - Cap Prim" />
+            </div>
+            <div class="form-group social-only" style="grid-column: 1 / -1">
+              <label for="social-location"> Location </label>
+              <input type="text" id="social-location" maxlength="150" placeholder="e.g. Pego Community Hall" />
+            </div>
+            <div class="form-group summer-only span-3" hidden>
+              <label for="social-leader"> Leader(s) </label>
+              <input type="text" id="social-leader" maxlength="100" placeholder="e.g. Name" />
+            </div>
+            <div class="form-group summer-only span-3" hidden>
+              <label for="social-duration"> Duration </label>
+              <input type="text" id="social-duration" maxlength="30" placeholder="e.g. 2.5 hrs" />
+            </div>
+            <div class="form-group summer-only span-3" hidden>
+              <label for="social-distance"> Distance </label>
+              <input type="text" id="social-distance" maxlength="30" placeholder="e.g. 8km" />
+            </div>
+            <div class="form-group summer-only span-3" hidden>
+              <label for="social-ascent"> Ascent </label>
+              <input type="text" id="social-ascent" maxlength="30" placeholder="e.g. 200m or None" />
+            </div>
+            <div class="form-group summer-only" style="grid-column: 1 / -1" hidden>
+              <label for="social-meeting"> Meeting point </label>
+              <input type="text" id="social-meeting" maxlength="200" placeholder="e.g. 38.7634, 0.2046 - park near the xiringuito" />
+            </div>
+            <div class="form-group summer-only" style="grid-column: 1 / -1" hidden>
+              <label for="social-contact"> Booking / contact </label>
+              <input type="text" id="social-contact" maxlength="200" placeholder="e.g. Reserve on +34 678 937 258 or WhatsApp" />
+            </div>
+            <div class="form-group" style="grid-column: 1 / -1">
+              <label for="social-description"> Description </label>
+              <textarea id="social-description" rows="4" placeholder="What is happening, what to bring, cost, how to reply"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-danger" id="social-delete" hidden>Delete</button>
+          <button type="button" class="btn btn-secondary" id="social-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <!-- ======================================================= FIREBASE ======================================================= -->
+  <!-- Walk levels dialog: kept at page level so it is not hidden with the calendar -->
+  <dialog id="walk-levels-dialog" aria-labelledby="walk-levels-title">
+    <div class="walk-levels-body">
+      <button type="button" class="walk-levels-close" data-close-levels>Close</button>
+      <h2 id="walk-levels-title">Walk Levels</h2>
+      <p><strong>E - Easy:</strong> A walk of up to 4½ hours on good surfaced tracks and less than 200 metres total ascent.</p>
+      <p><strong>M - Moderate:</strong> up to 12km, less than 400 metres total ascent and less than 50% rough going.</p>
+      <p><strong>MS - Moderately Strenuous:</strong> Up to 600 metres total ascent and/or no more than 15 km with some rough going taken at a reasonable pace.</p>
+      <p><strong>S - Strenuous:</strong> More than 600 metres total ascent and/or more than 15km with steep, loose or heavily vegetated sections.</p>
+      <p><strong>VS - Very Strenuous:</strong> More than 800 metres total ascent and/or more than 20km with steep, loose or heavily vegetated sections.</p>
+      <p><strong>X - Experienced walkers routes:</strong> Routes which require considerable stamina and/or significant scrambling skills on rough, steep or exposed sections.</p>
+      <p><strong>Scr - Scrambling:</strong> This implies the need for handholds to ascend steep rock pitches with a sense of exposure to vertigo and where a slip could lead to a serious accident.</p>
+      <p><strong>Scr0</strong> Very easy scrambling. Short sections requiring the use of handholds on not very steep or sustained sections. No exposure.</p>
+      <p><strong>Scr1</strong> Easy scrambling, requiring the use of handholds on not very steep or sustained sections. No exposure.</p>
+      <p><strong>Scr2</strong> Scrambling with some technical moves over steep and more continuous sections. With the probability of some exposure.</p>
+      <p><strong>Scr3</strong> Technically difficult scrambling. Sometimes over prolonged sections, possibly very exposed and with steep drops to one or both sides. Not easy to reverse down or escape from.</p>
+      <h3>Terrain</h3>
+      <p><strong>A</strong> - All good tracks</p>
+      <p><strong>B</strong> - Less than half the route on rough ground</p>
+      <p><strong>C</strong> - More than half the route on rough ground or routes with difficult steep awkward/rocky sections.</p>
+    </div>
+  </dialog>
+  <script type="module" src="./js/CBMW-Walk-Scheduler.js"></script>
+
+
+</body>
+
+</html>

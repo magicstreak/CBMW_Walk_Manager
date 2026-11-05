@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CBMW Walk Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!-- Map view: Leaflet -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <link rel="stylesheet" href="./css/CBMW-Walks-Database.css" />
+</head>
+
+<body>
+  <div class="page">
+    <header class="page-header">
+      <img class="page-logo" src="data:image/png;base64,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" alt="Costa Blanca Mountain Walkers logo" />
+      <h1 id="page-title">CBMW Walk Library</h1>
+      <p id="page-subtitle"></p>
+    </header>
+
+    <div id="picker-wrap" class="picker-bar" hidden>
+      <label for="leader-email" class="muted">I am</label>
+      <input id="leader-email" type="email" placeholder="Your email address" aria-label="Your email address" autocomplete="email" />
+      <span id="picker-msg" class="muted" aria-live="polite" hidden></span>
+    </div>
+
+    <main class="panel">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <input type="search" id="search" placeholder="Search walk ID, route, pueblo or grade" aria-label="Search walks" />
+          <select id="leader-filter" aria-label="Filter by leader" hidden></select>
+          <select id="grade-filter" aria-label="Filter by grade">
+            <option value="">All grades</option>
+            <option value="E">E</option>
+            <option value="M">M</option>
+            <option value="MS">MS</option>
+            <option value="S">S</option>
+            <option value="VS">VS</option>
+          </select>
+        </div>
+        <div class="toolbar-group" role="group" aria-label="Show walks as">
+          <button type="button" class="btn view-btn" data-walks-view="table" aria-pressed="true">List</button>
+          <button type="button" class="btn view-btn" data-walks-view="map" aria-pressed="false">Map</button>
+        </div>
+        <div class="toolbar-group">
+          <button type="button" class="btn btn-primary" id="add-walk" hidden>+ Add walk</button>
+          <button type="button" class="btn btn-primary" id="request-new-walk" hidden>+ Request new walk</button>
+        </div>
+      </div>
+
+      <section class="card" id="pending-panel" hidden>
+        <h2>Change requests waiting for approval <span class="muted" id="pending-count"></span></h2>
+        <div id="pending-list"></div>
+      </section>
+
+      <section class="card" id="my-requests-panel" hidden>
+        <details class="my-requests" open>
+          <summary><h2 id="my-requests-title">My change requests</h2></summary>
+          <div id="my-requests-list"></div>
+        </details>
+      </section>
+
+      <div class="table-wrap">
+        <table class="walks-table">
+          <thead>
+            <tr>
+              <th class="chev-cell"><span class="sr-only">Details</span></th>
+              <th class="sortable col-id" data-sort="id" tabindex="0" aria-sort="ascending">Walk ID <span class="sort-indicator">↑</span></th>
+              <th class="sortable" data-sort="route" tabindex="0">Route <span class="sort-indicator">↕</span></th>
+              <th class="sortable col-pueblo" data-sort="pueblo" tabindex="0">Pueblo <span class="sort-indicator">↕</span></th>
+              <th class="sortable" data-sort="grade" tabindex="0">Grade <span class="sort-indicator">↕</span></th>
+              <th class="sortable" data-sort="distance" tabindex="0">Distance <span class="sort-indicator">↕</span></th>
+              <th class="sortable" data-sort="ascent" tabindex="0">Ascent <span class="sort-indicator">↕</span></th>
+              <th class="sortable" data-sort="time" tabindex="0">Total time <span class="sort-indicator">↕</span></th>
+              <th class="sortable col-owner" data-sort="owner" tabindex="0">Owner <span class="sort-indicator">↕</span></th>
+              <th class="photo-cell">Photo</th>
+              <th id="actions-head" hidden>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="walks-body"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="empty-note" hidden>No walks match the current filters.</p>
+      <section class="walks-map-panel" id="walks-map-panel" hidden>
+        <p class="muted" id="walks-map-note" aria-live="polite"></p>
+        <div id="walks-map" role="region" aria-label="Map of walk locations"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Walk card popup, opened by clicking a walk row (same structure as the scheduler's walk card) -->
+  <div class="detail-overlay" id="walk-overlay">
+    <div class="detail-card walk-card-wrap" id="walk-card" role="dialog" aria-modal="true" aria-labelledby="detail-title"></div>
+  </div>
+
+  <!-- Add / edit / request-change dialog -->
+  <div class="modal" id="walk-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title"></h2>
+      <p class="lede" id="modal-lede"></p>
+      <form id="walk-form" novalidate>
+        <div class="form-grid" id="form-fields"></div>
+        <p class="form-error" id="form-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="modal-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="modal-submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="./js/CBMW-Walks-Database.js"></script>
+</body>
+
+</html>
