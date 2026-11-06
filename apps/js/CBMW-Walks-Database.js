@@ -3,29 +3,9 @@
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
     /* ========================================================= SETUP ========================================================= */
-    // Walks live in the programme-planning project (same as the Walk Scheduler's master walks).
+    // Walks live in the cbmw-portal project (same as the Walk Scheduler's master walks).
     // Change requests are stored beside them in walk_requests. Walk bookings (calendar project) are read only, for delete checks.
-    const walksConfig = {
-      apiKey: "AIzaSyB9WLJSl4QmubgBW5rknmnMeHcNbkwqOHQ",
-      authDomain: "programme-planning.firebaseapp.com",
-      databaseURL: "https://programme-planning-default-rtdb.europe-west1.firebasedatabase.app",
-      projectId: "programme-planning",
-      storageBucket: "programme-planning.firebasestorage.app",
-      messagingSenderId: "1028011310189",
-      appId: "1:1028011310189:web:8ac4f37a8d248899735364",
-      measurementId: "G-BBQ4Q6TQHD"
-    };
-    const bookingsConfig = {
-      apiKey: "AIzaSyC0hEmdWHSlBkdnxrQiNt_RITYsbj3wvi0",
-      authDomain: "cbmw-walk-scheduler.firebaseapp.com",
-      databaseURL: "https://cbmw-walk-scheduler-default-rtdb.europe-west1.firebasedatabase.app",
-      projectId: "cbmw-walk-scheduler",
-      storageBucket: "cbmw-walk-scheduler.firebasestorage.app",
-      messagingSenderId: "108766389213",
-      appId: "1:108766389213:web:cded7ada3d32874b380c34",
-      measurementId: "G-QFS6HHL007"
-    };
-
+import { firebaseConfig as walksConfig } from "./firebase-config.js";
     // View comes from the hosting page: ?view=walker | leader | admin (default walker).
     // Leader view also takes ?leader_id=101 so requests are attributed to that leader; otherwise the leader picks an ID.
     const params = new URLSearchParams(window.location.search);
@@ -1419,14 +1399,9 @@
       const walksApp = initializeApp(walksConfig, "walksDatabase");
       walksDb = getDatabase(walksApp);
       const auth = getAuth(walksApp);
-      let bookingsReady = Promise.resolve();
-      try {
-        const bookingsApp = initializeApp(bookingsConfig, "walksBookingsRead");
-        bookingsDb = getDatabase(bookingsApp);
-        bookingsReady = signInAnonymously(getAuth(bookingsApp)).catch((err) => console.error("Bookings sign-in failed:", err));
-      } catch (err) {
-        console.error("Bookings connection failed.", err);
-      }
+      // Bookings and leaders now live in the same database as the walks, so they reuse this connection.
+      bookingsDb = walksDb;
+      const bookingsReady = Promise.resolve();
       signInAnonymously(auth)
         .then(() => bookingsReady)
         .then(start)
