@@ -9,29 +9,8 @@
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
     import {getAuth, signInAnonymously} from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
       /* ========================================================= FIREBASE CONFIG ========================================================= */
-// DB 1: Walk bookings / scheduler
-const firebaseConfigCalendar = {
-  apiKey: "AIzaSyC0hEmdWHSlBkdnxrQiNt_RITYsbj3wvi0",
-  authDomain: "cbmw-walk-scheduler.firebaseapp.com",
-  databaseURL: "https://cbmw-walk-scheduler-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "cbmw-walk-scheduler",
-  storageBucket: "cbmw-walk-scheduler.firebasestorage.app",
-  messagingSenderId: "108766389213",
-  appId: "1:108766389213:web:cded7ada3d32874b380c34",
-  measurementId: "G-QFS6HHL007"
-};
-
-// DB 2: Master walk routes
-const firebaseConfigWalks = {
-  apiKey: "AIzaSyB9WLJSl4QmubgBW5rknmnMeHcNbkwqOHQ",
-  authDomain: "programme-planning.firebaseapp.com",
-  databaseURL: "https://programme-planning-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "programme-planning",
-  storageBucket: "programme-planning.firebasestorage.app",
-  messagingSenderId: "1028011310189",
-  appId: "1:1028011310189:web:8ac4f37a8d248899735364",
-  measurementId: "G-BBQ4Q6TQHD"
-};
+// Programme planning database (cbmw-portal): bookings, leaders, walks and requests
+import { firebaseConfig as firebaseConfigWalks } from "./firebase-config.js";
 
 let db = null;
 let dbWalks = null;
@@ -41,24 +20,17 @@ let isWalksFirebaseActive = false;
 // Anonymous sign-in for both projects. Data is read only after this finishes.
 const authSignIns = [];
 
+// One database now holds everything (bookings, leaders, walks), so both names point at the same connection.
 try {
-  const calendarApp = initializeApp(firebaseConfigCalendar, "walkSchedulerBookings");
-  db = getDatabase(calendarApp);
+  const plannerApp = initializeApp(firebaseConfigWalks, "cbmwProgrammePlanning");
+  db = getDatabase(plannerApp);
+  dbWalks = db;
   isFirebaseActive = true;
-  authSignIns.push(signInAnonymously(getAuth(calendarApp)));
-  console.log("Bookings Firebase connected.");
-} catch (err) {
-  console.error("Bookings Firebase startup failed.", err);
-}
-
-try {
-  const walksApp = initializeApp(firebaseConfigWalks, "walkMasterDatabase");
-  dbWalks = getDatabase(walksApp);
   isWalksFirebaseActive = true;
-  authSignIns.push(signInAnonymously(getAuth(walksApp)));
-  console.log("Master walks Firebase connected.");
+  authSignIns.push(signInAnonymously(getAuth(plannerApp)));
+  console.log("Programme planning Firebase connected.");
 } catch (err) {
-  console.error("Master walks Firebase startup failed.", err);
+  console.error("Programme planning Firebase startup failed.", err);
 }
 
 // Resolves when both sign-ins have finished (failures are logged, so the app still loads)
