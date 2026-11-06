@@ -3,17 +3,8 @@
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
     /* ========================================================= SETUP ========================================================= */
-    // Same Firebase project as the Walk Scheduler: reads walk_bookings for delete checks, reads/writes leaders and leader_requests.
-    const firebaseConfig = {
-      apiKey: "AIzaSyC0hEmdWHSlBkdnxrQiNt_RITYsbj3wvi0",
-      authDomain: "cbmw-walk-scheduler.firebaseapp.com",
-      databaseURL: "https://cbmw-walk-scheduler-default-rtdb.europe-west1.firebasedatabase.app",
-      projectId: "cbmw-walk-scheduler",
-      storageBucket: "cbmw-walk-scheduler.firebasestorage.app",
-      messagingSenderId: "108766389213",
-      appId: "1:108766389213:web:cded7ada3d32874b380c34",
-      measurementId: "G-QFS6HHL007"
-    };
+    // The single cbmw-portal database: reads walk_bookings for delete checks, reads/writes leaders and leader_requests.
+import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
 
     // View comes from the hosting page: ?view=walker | leader | admin (default walker).
     // Leader view also takes ?leader_id=101 so the page knows who is asking. Without it, the leader picks their name.
