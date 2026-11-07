@@ -53,11 +53,10 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
       return String(max + 1);
     }
 
-    // Walk bookings that point at this leader, by ID or (older bookings) by name
+    // Walk bookings that point at this leader, by leader_id
     function bookingCountFor(leader) {
-      const name = fullName(leader);
       return Object.values(bookings).filter(Boolean).filter((b) =>
-        b.leader_id ? b.leader_id === leader.leader_id : (b.leader_name && b.leader_name === name)
+        String(b.leader_id) === String(leader.leader_id)
       ).length;
     }
 
