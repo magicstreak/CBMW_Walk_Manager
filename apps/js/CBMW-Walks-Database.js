@@ -36,8 +36,8 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       { key: "Route_Name", label: "Route name", required: true },
       { key: "Pueblo", label: "Pueblo" },
       { key: "Grade", label: "Grade", type: "choice", options: GRADES },
-      { key: "Leader", label: "Leader (owner)", type: "choice", source: "leaders" },
-      { key: "Permitted_Leaders", label: "Permitted leaders", type: "multichoice", source: "leaders", full: true, hint: "Other leaders who may lead this walk. The owner is always permitted." },
+      { key: "owner_leader_id", label: "Leader (owner)", type: "choice", source: "leaders" },
+      { key: "permitted_leader_ids", label: "Permitted leaders", type: "multichoice", source: "leaders", full: true, hint: "Other leaders who may lead this walk. The owner is always permitted." },
       { key: "Start_Time", label: "Start time" },
       { key: "Distance", label: "Distance" },
       { key: "Ascent", label: "Ascent" },
@@ -57,14 +57,14 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       { key: "Lunch_or_Break_Notes", label: "Lunch or break notes", type: "textarea", full: true },
       { key: "Reservation_Notes", label: "Reservation notes", type: "textarea", full: true },
       { key: "Season_last_walked_or_offered", label: "Season last walked or offered" },
-      { key: "Last_offered_or_led_by", label: "Last offered or led by" },
+      { key: "Last_offered_or_led_by", label: "Last offered or led by", type: "choice", source: "leaders" },
       { key: "X", label: "X" },
       { key: "walkID", label: "walkID (legacy numeric ID)" },
     ];
     // Leader view (details and change requests) does not show the last walked / last offered history
     const LEADER_HIDDEN_FIELDS = ["Season_last_walked_or_offered", "Last_offered_or_led_by"];
     // Walker view hides these details; leader view also hides the last walked / last offered history; admin keeps all
-    const WALKER_HIDDEN = ["Leader", "Permitted_Leaders", "Start_Time", "Lunch_or_Break_Notes", "Reservation_Notes",
+    const WALKER_HIDDEN = ["owner_leader_id", "permitted_leader_ids", "Start_Time", "Lunch_or_Break_Notes", "Reservation_Notes",
       "Season_last_walked_or_offered", "Last_offered_or_led_by", "WiS_Bitly_Link", "KomootBitly", "walkID"];
     // File uploads: shown in the edit and request forms. The walk record keeps the file name; the file itself is stored beside it.
     const FILE_FIELDS = [
@@ -93,6 +93,25 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
     };
     const sortById = (a, b) => a.id.localeCompare(b.id, undefined, { numeric: true });
 
+    // Owner and permitted leaders are stored as leader IDs. Names are looked up from the leaders list for display.
+    const PLACEHOLDER_LEADER_ID = "0"; // "Leader TBC"
+    const ownerIdOf = (w) => str(w.owner_leader_id);
+    const ownerName = (w) => leaderName(ownerIdOf(w));
+    const permittedIdsOf = (w) => Array.isArray(w.permitted_leader_ids)
+      ? w.permitted_leader_ids.map(String)
+      : str(w.permitted_leader_ids).split(",").map((s) => s.trim()).filter(Boolean);
+    const permittedNamesOf = (w) => permittedIdsOf(w).map((id) => leaderName(id)).filter(Boolean).join(", ");
+    const displayValue = (w, k) => k === "owner_leader_id" ? ownerName(w)
+      : k === "permitted_leader_ids" ? permittedNamesOf(w)
+      : k === "Last_offered_or_led_by" ? leaderName(str(w[k]))
+      : str(w[k]);
+    const myLeader = () => leaders.find((l) => String(l.leader_id) === String(myLeaderId)) || null;
+    // No owner, the placeholder, or an ID that is not in the leaders list: anyone can take the walk on
+    const isUnassignedOwner = (w) => {
+      const id = ownerIdOf(w);
+      return !id || id === PLACEHOLDER_LEADER_ID || !leaders.some((l) => String(l.leader_id) === id);
+    };
+
     function nextWalkId() {
       const nums = walks.map((w) => { const m = w.id.match(/^walk_(\d{3})$/); return m ? Number(m[1]) : 0; });
       return `walk_${String(Math.max(0, ...nums) + 1).padStart(3, "0")}`;
@@ -113,6 +132,11 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
 
     // Blank optional values are stored as null so Firebase removes them
     const toStored = (v) => String(v ?? "");
+    const storedValue = (key, v) => {
+      if (key !== "permitted_leader_ids") return toStored(v);
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return str(v).split(",").map((s) => s.trim()).filter(Boolean);
+    };
 
     /* ========================================================= FILES (GPX and photo) =========================================================
        GPX routes are stored as text at walk_gpx/{walk key}; photos as resized JPEG data at walk_photos/{walk key}.
@@ -291,9 +315,9 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           </div></section>` : "";
 
       // Leaders and history (hidden from walkers and, for history, from leaders)
-      const adminKeys = ["Leader", "Permitted_Leaders", "Season_last_walked_or_offered", "Last_offered_or_led_by", "X", "walkID"];
+      const adminKeys = ["owner_leader_id", "permitted_leader_ids", "Season_last_walked_or_offered", "Last_offered_or_led_by", "X", "walkID"];
       const admin = adminKeys.filter(has).map((k) =>
-        `<div class="kv"><dt>${escapeHtml(labelOf(k))}</dt><dd>${k === "Last_offered_or_led_by" ? "" : escapeHtml(value(k))}</dd></div>`).join("");
+        `<div class="kv"><dt>${escapeHtml(labelOf(k))}</dt><dd>${escapeHtml(displayValue(walk, k))}</dd></div>`).join("");
       const adminBlock = admin ? `<section class="dsec dsec-admin"><h4>Leaders and history</h4><dl class="kv-list">${admin}</dl></section>` : "";
 
       return `<div class="detail-grid walk-detail">
@@ -315,16 +339,14 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       const sel = document.getElementById("leader-filter");
       sel.hidden = VIEW === "walker";
       if (VIEW === "walker") return;
-      const names = [...new Set(walks.map((w) => str(w.Leader)).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-      const hasBlank = walks.some((w) => !str(w.Leader));
-      const key = names.join("|") + (hasBlank ? "|blank" : "");
+      const ids = [...new Set(walks.map(ownerIdOf).filter(Boolean))]
+        .sort((a, b) => (leaderName(a) || a).localeCompare(leaderName(b) || b, undefined, { numeric: true, sensitivity: "base" }));
+      const key = ids.join("|");
       if (key === leaderFilterKey) return;
       leaderFilterKey = key;
       const current = sel.value;
       sel.innerHTML = [`<option value="">All leaders</option>`,
-        ...names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`),
-        hasBlank ? `<option value="__blank__">No leader set</option>` : ""].join("");
+        ...ids.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(leaderName(id) || `Leader ${id}`)}</option>`)].join("");
       sel.value = [...sel.options].some((o) => o.value === current) ? current : "";
     }
     function filterWalks() {
@@ -333,50 +355,40 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       const leaderChoice = document.getElementById("leader-filter").hidden ? "" : document.getElementById("leader-filter").value;
       return walks.filter((w) => {
         if (grade && str(w.Grade) !== grade) return false;
-        if (leaderChoice === "__blank__" && str(w.Leader)) return false;
-        if (leaderChoice && leaderChoice !== "__blank__" && str(w.Leader) !== leaderChoice) return false;
+        if (leaderChoice && ownerIdOf(w) !== leaderChoice) return false;
         if (!term) return true;
         return [w.id, w.Route_Name, w.Pueblo, w.Grade].join(" ").toLowerCase().includes(term);
       });
     }
 
-    // Leaders may request changes only to walks they lead, or to walks with no valid leader yet
-    // (so they can take it on). A valid leader is one whose full name is in the leaders list.
+    // Leaders may request changes only to walks they lead, or to walks with no owner yet (so they can take it on).
     function canRequestChange(w) {
-      const me = leaders.find((l) => l.leader_id === myLeaderId);
-      const myName = me ? fullName(me) : "";
-      if (!myName) return false; // nobody identified: no request buttons
-      const current = str(w.Leader);
-      const validNames = new Set(leaders.map(fullName));
-      const unassigned = !current || !validNames.has(current); // no valid leader yet
-      return unassigned || current === myName; // walks they own, or walks with no valid leader
+      const me = myLeader();
+      if (!me) return false; // nobody identified: no request buttons
+      return isUnassignedOwner(w) || ownerIdOf(w) === String(me.leader_id);
     }
 
-    // A walk with no valid leader can be taken on: it moves to the logged-in leader
-    // Leader View: walks the logged-in leader owns (listed as leader on the walk)
+    // Leader View: walks the logged-in leader owns
     function isOwnedWalk(w) {
       if (!isLeader) return false;
-      const me = leaders.find((l) => l.leader_id === myLeaderId);
-      const myName = me ? fullName(me) : "";
-      return !!myName && str(w.Leader) === myName;
+      const me = myLeader();
+      return !!me && ownerIdOf(w) === String(me.leader_id);
     }
     function isUnassignedWalk(w) {
-      const current = str(w.Leader);
-      const validNames = new Set(leaders.map(fullName));
-      return !current || !validNames.has(current);
+      return isUnassignedOwner(w);
     }
     function canTakeOwnership(w) {
       if (!isLeader || !isUnassignedWalk(w)) return false;
-      const me = leaders.find((l) => l.leader_id === myLeaderId);
-      return !!(me && fullName(me));
+      return !!myLeader();
     }
+    // A walk with no owner moves to the logged-in leader
     async function takeOwnership(w) {
-      const me = leaders.find((l) => l.leader_id === myLeaderId);
-      const myName = me ? fullName(me) : "";
-      if (!myName) return;
+      const me = myLeader();
+      if (!me) return;
+      const myName = fullName(me);
       if (!confirm(`Take ownership of walk ${w.id} (${w.Route_Name || "no name"})? It will be listed with ${myName} as leader.`)) return;
       try {
-        await update(ref(walksDb, "walks/" + w.id), { Leader: myName });
+        await update(ref(walksDb, "walks/" + w.id), { owner_leader_id: String(me.leader_id) });
       } catch (err) {
         alert("This walk could not be taken on. Please try again, or ask an admin.");
       }
@@ -429,7 +441,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       if (key === "id") return str(w.id);
       if (key === "route") return str(w.Route_Name).toLowerCase();
       if (key === "pueblo") return str(w.Pueblo).toLowerCase();
-      if (key === "owner") return str(w.Leader).toLowerCase();
+      if (key === "owner") return ownerName(w).toLowerCase();
       if (key === "grade") return GRADE_RANK[str(w.Grade).toUpperCase()] ?? 99;
       if (key === "distance" || key === "ascent") { const n = parseFloat(str(w[key === "distance" ? "Distance" : "Ascent"]).replace(",", ".")); return Number.isFinite(n) ? n : null; }
       if (key === "time") { const m = str(w.Total_Time).match(/(\d+)\s*h\s*(\d+)?/i); return m ? Number(m[1]) * 60 + Number(m[2] || 0) : null; }
@@ -503,7 +515,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           <td>${escapeHtml(w.Distance) || "–"}</td>
           <td>${escapeHtml(w.Ascent) || "–"}</td>
           <td>${escapeHtml(w.Total_Time) || "–"}</td>
-          <td class="col-owner">${escapeHtml(w.Leader) || "–"}</td>
+          <td class="col-owner">${escapeHtml(ownerName(w)) || "–"}</td>
           <td class="photo-cell">${walkThumbHtml(w)}</td>
           ${VIEW === "walker" ? "" : `<td class="actions-cell">${actions.join(" ")}</td>`}
         </tr>`);
@@ -620,14 +632,14 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
     // Popup content for a map pin: the walk's main details, in every view.
     // Each view hides the same fields the list hides from it (walker view hides leader details).
     const POPUP_FIELDS = [
-      "Grade", "Pueblo", "Leader", "Permitted_Leaders", "Start_Time", "Distance", "Ascent", "Total_Time",
+      "Grade", "Pueblo", "owner_leader_id", "permitted_leader_ids", "Start_Time", "Distance", "Ascent", "Total_Time",
       "Terrain", "Dogs", "Scr", "Restrictions", "Route_Description", "Directions", "Lunch_or_Break_Notes", "Reservation_Notes",
     ];
     function walkPopupHtml(w) {
       const hidden = VIEW === "walker" ? WALKER_HIDDEN : VIEW === "leader" ? LEADER_HIDDEN_FIELDS : [];
       const rows = POPUP_FIELDS
         .filter((k) => !hidden.includes(k) && str(w[k]) !== "")
-        .map((k) => `<div class="walk-pin-row"><span class="walk-pin-label">${escapeHtml(LABELS[k] || k)}</span> ${escapeHtml(str(w[k]))}</div>`)
+        .map((k) => `<div class="walk-pin-row"><span class="walk-pin-label">${escapeHtml(LABELS[k] || k)}</span> ${escapeHtml(displayValue(w, k))}</div>`)
         .join("");
       return `<div class="walk-pin"><strong>${escapeHtml(w.id)}</strong> ${escapeHtml(str(w.Route_Name))}${rows ? `<div class="walk-pin-rows">${rows}</div>` : ""}</div>`;
     }
@@ -689,18 +701,17 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
     // SCR from the values already used in the walks data. The current value is always included.
     const NO_LEADER_OPTIONS = ["~~ No Leader", "~~ Leader TBC"];
     const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    // Returns { value, label } pairs. Leader choices store the leader ID and show the name.
     function choiceOptions(field, current) {
-      let values;
-      if (field.options) {
-        values = [...field.options];
-      } else if (field.source === "leaders") {
-        values = [...new Set(leaders.map(fullName).filter(Boolean))].sort(byName);
-        values = [...NO_LEADER_OPTIONS, ...values];
-      } else {
-        values = [...new Set(walks.map((w) => str(w[field.key])).filter(Boolean))].sort(byName);
+      if (field.options) return field.options.map((v) => ({ value: v, label: v }));
+      if (field.source === "leaders") {
+        return leaders
+          .map((l) => ({ value: String(l.leader_id), label: fullName(l) || String(l.leader_id) }))
+          .sort((a, b) => byName(a.label, b.label));
       }
+      const values = [...new Set(walks.map((w) => str(w[field.key])).filter(Boolean))].sort(byName);
       if (current && !values.includes(current)) values.unshift(current);
-      return values;
+      return values.map((v) => ({ value: v, label: v }));
     }
 
     function fieldHtml(field, value, disabled) {
@@ -709,17 +720,18 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       let control;
       if (field.type === "choice") {
         const current = str(value);
-        const options = choiceOptions(field, current).map((v) =>
-          `<option value="${escapeHtml(v)}" ${v === current ? "selected" : ""}>${escapeHtml(v)}</option>`
+        const options = choiceOptions(field, current).map((o) =>
+          `<option value="${escapeHtml(o.value)}" ${o.value === current ? "selected" : ""}>${escapeHtml(o.label)}</option>`
         ).join("");
         control = `<select id="${id}" name="${field.key}" ${disabled ? "disabled" : ""}><option value="" ${current ? "" : "selected"}>–</option>${options}</select>`;
       } else if (field.type === "multichoice") {
-        const chosen = new Set(str(value).split(",").map((v) => v.trim()).filter(Boolean));
-        const names = [...new Set(leaders.map(fullName).filter(Boolean))];
-        for (const c of chosen) if (!names.includes(c)) names.unshift(c);
-        names.sort(byName);
-        control = `<div class="check-list" id="${id}">${names.map((n) =>
-          `<label class="check-item"><input type="checkbox" name="${field.key}" value="${escapeHtml(n)}" ${chosen.has(n) ? "checked" : ""} ${disabled ? "disabled" : ""} /> ${escapeHtml(n)}</label>`
+        const chosen = new Set(Array.isArray(value) ? value.map(String) : str(value).split(",").map((v) => v.trim()).filter(Boolean));
+        const opts = leaders
+          .filter((l) => String(l.leader_id) !== PLACEHOLDER_LEADER_ID)
+          .map((l) => ({ id: String(l.leader_id), name: fullName(l) }))
+          .sort((a, b) => byName(a.name, b.name));
+        control = `<div class="check-list" id="${id}">${opts.map((o) =>
+          `<label class="check-item"><input type="checkbox" name="${field.key}" value="${escapeHtml(o.id)}" ${chosen.has(o.id) ? "checked" : ""} ${disabled ? "disabled" : ""} /> ${escapeHtml(o.name)}</label>`
         ).join("")}</div>`;
       } else if (field.type === "textarea") {
         control = `<textarea id="${id}" name="${field.key}" ${disabled ? "disabled" : ""}>${val}</textarea>`;
@@ -868,7 +880,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       const record = {};
       for (const f of EDITABLE_FIELDS) {
         record[f.key] = f.type === "multichoice"
-          ? Array.from(document.querySelectorAll(`#form-fields input[name="${f.key}"]:checked`)).map((i) => i.value).join(", ")
+          ? Array.from(document.querySelectorAll(`#form-fields input[name="${f.key}"]:checked`)).map((i) => i.value)
           : get(f.key);
       }
       if (mode !== "request" && mode !== "new") record.walk_key = get("walk_key");
@@ -909,14 +921,14 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       try {
         if (mode === "create") {
           const data = {};
-          for (const f of EDITABLE_FIELDS) data[f.key] = toStored(record[f.key]);
+          for (const f of EDITABLE_FIELDS) data[f.key] = storedValue(f.key, record[f.key]);
           Object.assign(data, fileNameFields(files));
           await set(ref(walksDb, "walks/" + record.walk_key), data);
           await saveFileChanges(record.walk_key, files);
         } else if (mode === "edit") {
           // update() keeps any fields this page does not manage
           const data = {};
-          for (const f of EDITABLE_FIELDS) data[f.key] = toStored(record[f.key]);
+          for (const f of EDITABLE_FIELDS) data[f.key] = storedValue(f.key, record[f.key]);
           Object.assign(data, fileNameFields(files));
           const req = dialogRequest;
           if (req) {
@@ -966,9 +978,12 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           const before = {};
           for (const f of EDITABLE_FIELDS) {
             if (LEADER_HIDDEN_FIELDS.includes(f.key)) continue;   // not on the leader's form
-            const was = str(current[f.key]);
-            if (record[f.key] !== was) {
-              changes[f.key] = record[f.key];
+            const was = f.type === "multichoice" ? permittedIdsOf(current).join(",") : str(current[f.key]);
+            const now = f.type === "multichoice"
+              ? (Array.isArray(record[f.key]) ? record[f.key].join(",") : str(record[f.key]))
+              : record[f.key];
+            if (now !== was) {
+              changes[f.key] = storedValue(f.key, record[f.key]);
               before[f.key] = was;
             }
           }
@@ -1124,7 +1139,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       const coordsOk = hasCoords && Number.isFinite(lat) && Number.isFinite(lon);
       const mapUrl = coordsOk ? `https://www.google.com/maps?q=${encodeURIComponent(lat + "," + lon)}` : "";
       const rows = [];
-      if (show("Leader")) rows.push(info(labelOf("Leader"), escapeHtml(value("Leader"))));
+      if (show("owner_leader_id")) rows.push(info(labelOf("owner_leader_id"), escapeHtml(ownerName(w))));
       if (show("Pueblo")) rows.push(info(labelOf("Pueblo"), escapeHtml(value("Pueblo"))));
       if (show("Start_Time")) rows.push(info(labelOf("Start_Time"), escapeHtml(value("Start_Time"))));
       if (show("WiS_URL") && url(value("WiS_URL"))) rows.push(info("Walks in Spain", linkTo(value("WiS_URL"))));
@@ -1146,9 +1161,8 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       const dogs = show("Dogs") ? `<div class="walk-dogs">🐾 ${escapeHtml(value("Dogs"))}</div>` : "";
 
       // Leaders and history: admin only
-      const adminKeys = ["Permitted_Leaders", "Season_last_walked_or_offered", "Last_offered_or_led_by"];
-      // Last offered or led by: the label stays, the value is left blank in admin view
-      const adminRows = isAdmin ? adminKeys.filter(show).map((k) => info(labelOf(k), k === "Last_offered_or_led_by" ? "" : escapeHtml(value(k)))).join("") : "";
+      const adminKeys = ["permitted_leader_ids", "Season_last_walked_or_offered", "Last_offered_or_led_by"];
+      const adminRows = isAdmin ? adminKeys.filter(show).map((k) => info(labelOf(k), escapeHtml(displayValue(w, k)))).join("") : "";
       const admin = adminRows ? `<div class="walk-section-title">Leaders and history</div><div class="walk-info">${adminRows}</div>` : "";
 
       // Card actions, same rules as the table
@@ -1290,11 +1304,12 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           for (const [key, value] of Object.entries(request.changes || {})) {
             if (key === "GPX_Text") fileWrites.push(saveFileNode(newKey, "walk_gpx", value ? { name: request.changes.GPX_Name || "", text: value, updated_at: now } : null));
             else if (key === "Photo_Data") fileWrites.push(saveFileNode(newKey, "walk_photos", value ? { name: request.changes.Photo_Name || "", data: value, updated_at: now } : null));
-            else data[key] = toStored(value);
+            else data[key] = storedValue(key, value);
           }
           // The requesting leader becomes the owner of the new walk
-          const owner = leaders.find((l) => l.leader_id === request.requested_by);
-          if (owner) data.Leader = fullName(owner);
+          const owner = leaders.find((l) => String(l.leader_id) === String(request.requested_by));
+          if (owner) data.owner_leader_id = String(owner.leader_id);
+          if (!data.permitted_leader_ids) data.permitted_leader_ids = [];
           await set(ref(walksDb, "walks/" + newKey), data);
           await Promise.all(fileWrites);
           await update(ref(walksDb, "walk_requests/" + request.request_id), {
@@ -1318,7 +1333,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           for (const [key, value] of Object.entries(request.changes || {})) {
             if (key === "GPX_Text") fileWrites.push(saveFileNode(request.walk_id, "walk_gpx", value ? { name: request.changes.GPX_Name || "", text: value, updated_at: now } : null));
             else if (key === "Photo_Data") fileWrites.push(saveFileNode(request.walk_id, "walk_photos", value ? { name: request.changes.Photo_Name || "", data: value, updated_at: now } : null));
-            else data[key] = toStored(value);
+            else data[key] = storedValue(key, value);
           }
           await update(ref(walksDb, "walks/" + request.walk_id), data);
           await Promise.all(fileWrites);
