@@ -485,23 +485,18 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       return leader ? (String(leader.display_name || "").trim() || leaderFullName(leader)) : "";
     }
 
-    // Walker-facing names for a booking's leaders (falls back to the stored name for old bookings)
+    // Walker-facing names for a booking's leaders, looked up from their IDs
     function bookingLeaderDisplayNames(record) {
-      const names = bookingLeaderIds(record).map((id) => leaderDisplayName(findLeader(id))).filter(Boolean);
-      return names.length ? names : [record?.leader_name || ""].filter(Boolean);
+      return bookingLeaderIds(record).map((id) => leaderDisplayName(findLeader(id))).filter(Boolean);
     }
 
     function findLeader(leaderId) {
       return LEADER_LOOKUP.find((l) => l.leader_id === leaderId) || null;
     }
 
-    // Bookings saved before the lookup existed only have a name; match it to a leader where possible
+    // The booking's main leader ID
     function selectedLeaderId(record) {
-      if (!record) return "";
-      if (record.leader_id) return record.leader_id;
-      const name = String(record.leader_name || "").trim();
-      const match = LEADER_LOOKUP.find((l) => leaderFullName(l) === name);
-      return match ? match.leader_id : "";
+      return record?.leader_id || "";
     }
 
     /* Leader ids allowed to lead a walk: its owner plus the permitted leaders in the walk library.
@@ -509,9 +504,10 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
     function permittedLeaderIds(walkNo) {
       const walk = getMasterWalk(walkNo);
       if (!walk) return null;
-      const names = new Set([walk.Leader, ...String(walk.Permitted_Leaders || "").split(",")]
-        .map((n) => String(n || "").trim()).filter(Boolean));
-      const ids = LEADER_LOOKUP.filter((l) => names.has(leaderFullName(l))).map((l) => l.leader_id);
+      // Owner plus permitted leaders, as leader IDs
+      const raw = [walk.owner_leader_id, ...(Array.isArray(walk.permitted_leader_ids) ? walk.permitted_leader_ids : String(walk.permitted_leader_ids || "").split(","))];
+      const known = new Set(LEADER_LOOKUP.map((l) => String(l.leader_id)));
+      const ids = [...new Set(raw.map((id) => String(id ?? "").trim()).filter((id) => id && known.has(id)))];
       return ids.length ? ids : null;
     }
 
@@ -523,7 +519,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       return placeholder + options;
     }
 
-    /* Leader ids on a booking: up to two (leader_ids). Older bookings only have leader_id or a name. */
+    /* Leader ids on a booking: up to two (leader_ids), or the single leader_id. */
     function bookingLeaderIds(record) {
       if (!record) return [];
       if (Array.isArray(record.leader_ids) && record.leader_ids.length) return record.leader_ids;
@@ -1069,7 +1065,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         case "walk_name":
           return (record.walk_name || "").toLowerCase();
         case "leader_name":
-          return (record.leader_name || "").toLowerCase();
+          return bookingLeaderLabel(record).toLowerCase();
         case "status":
           return bookingStatus(record) === "live" ? 1 : 0;
         case "notes":
@@ -1083,9 +1079,13 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       }
     }
 
-    // Each leader named on a booking, one at a time (a booking can list two leaders as "A, B")
+    // Full names of a booking's leaders, looked up from their IDs
     function leaderNamesOnBooking(record) {
-      return String(record?.leader_name || "").split(",").map((n) => n.trim()).filter(Boolean);
+      return bookingLeaderIds(record).map((id) => leaderFullName(findLeader(id))).filter(Boolean);
+    }
+    // Display label for a booking's leaders, e.g. "Ann Smith, Bob Jones"
+    function bookingLeaderLabel(record) {
+      return leaderNamesOnBooking(record).join(", ");
     }
 
     // Rebuild the Leader / Pueblo dropdowns from the data, keeping the current selection
@@ -1098,13 +1098,15 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         const select = document.getElementById(id);
         if (!select) return;
         const current = select.value;
+        // Leader filter: values are leader IDs, labels are names
+        const label = (v) => (field ? v : (leaderFullName(findLeader(v)) || v));
         const values = [...new Set(field
           ? records.map((r) => r[field]).filter(Boolean)
-          : records.flatMap((r) => leaderNamesOnBooking(r)))]
-          .sort((a, b) => a.localeCompare(b));
+          : records.flatMap((r) => bookingLeaderIds(r).map(String)).filter(Boolean))]
+          .sort((a, b) => label(a).localeCompare(label(b)));
         select.innerHTML = "";
         select.appendChild(new Option(allLabel, "ALL"));
-        values.forEach((v) => select.appendChild(new Option(v, v)));
+        values.forEach((v) => select.appendChild(new Option(label(v), v)));
         select.value = values.includes(current) ? current : "ALL";
       });
     }
@@ -1134,14 +1136,14 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           if (rangeTo && iso > rangeTo) return false;
         }
         if (grade !== "ALL" && r.walk_grade !== grade) return false;
-        if (leader !== "ALL" && !leaderNamesOnBooking(r).includes(leader)) return false;
+        if (leader !== "ALL" && !bookingLeaderIds(r).map(String).includes(String(leader))) return false;
         if (pueblo !== "ALL" && r.pueblo !== pueblo) return false;
         if (status !== "ALL" && bookingStatus(r) !== status) return false;
         if (!previewReturnView && !isVisibleInView(r)) return false;
         if ((currentView !== "walker" || previewReturnView) && !showPastWalks && isPastDate(r.date)) return false;
         if (search) {
           const haystack = [r.date, r.start_time, r.walk_grade, r.walk_number, r.walk_name,
-            r.leader_name, r.notes, r.pueblo, r.comments].join(" ").toLowerCase();
+            leaderNamesOnBooking(r).join(" "), r.notes, r.pueblo, r.comments].join(" ").toLowerCase();
           if (!haystack.includes(search)) return false;
         }
         return true;
@@ -1255,16 +1257,14 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       const me = myLeader();
       const walk = getMasterWalk(walkNo);
       if (!me || !walk) return false;
-      return normaliseName(walk.Leader) !== "" && normaliseName(walk.Leader) === normaliseName(leaderFullName(me));
+      return String(walk.owner_leader_id || "") !== "" && String(walk.owner_leader_id) === String(me.leader_id);
     }
     // Leaders may book only walks they own or are a permitted leader on
     function leaderMayLeadWalk(walkNo) {
       const me = myLeader();
       const walk = getMasterWalk(walkNo);
       if (!me || !walk) return false;
-      const mine = normaliseName(leaderFullName(me));
-      const names = [walk.Leader, ...String(walk.Permitted_Leaders || "").split(",")];
-      return names.some((n) => normaliseName(n) !== "" && normaliseName(n) === mine);
+      return (permittedLeaderIds(walkNo) || []).includes(String(me.leader_id));
     }
     // In Leader View the walk lists only show walks this leader may lead
     function leaderCanPickWalk(walkId) {
@@ -1370,7 +1370,6 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       if (notAllowed) {
         return fail(`${leaderFullName(notAllowed)} is not permitted to lead walk ${walkNo}. Only the owner or a permitted leader can be listed.`);
       }
-      const leader = chosen.map((l) => leaderFullName(l)).join(", ");
 
       const walkChanged = walkNo !== String(record.walk_number || "").trim();
       saveBookingRecord(key, {
@@ -1381,7 +1380,6 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         start_time: startTime,
         leader_id: leaderRecord.leader_id,
         leader_ids: chosen.map((l) => l.leader_id),
-        leader_name: leader,
         comments: form.elements.comments.value.trim(),
         notes: form.elements.notes.value.trim(),
         updated_at: new Date().toISOString(),
@@ -1725,7 +1723,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           <td data-label="Walk name">${pendingRequestBadge(key)}${cancelledBadge(record)}${modifiedBadge(record)}<strong>${escapeHtml(displayWalkName || "-")}</strong>${walkerStats}${currentView === "walker" ? `<div class="walker-desc-inline">${walkerDescriptionCell(record)}</div>` : ""}</td>
           <td class="walker-only-col" data-label="Description">${walkerDescriptionCell(record)}</td>
           <td class="walker-image-col" data-label="Photo">${walkThumbHtml(record)}</td>
-          <td class="hide-in-walker" data-label="Leader">${escapeHtml(record.leader_name || "-")}</td>
+          <td class="hide-in-walker" data-label="Leader">${escapeHtml(bookingLeaderLabel(record) || "-")}</td>
           <td class="hide-in-walker" data-label="Pueblo">${escapeHtml(displayPueblo || "-")}</td>
           <td class="hide-in-walker" data-label="Comments">${escapeHtml(record.comments || "-")}</td>
           <td class="notes-col${bookingStatus(record) === "draft" && String(record.notes || "").trim() ? " notes-flag" : ""}" data-label="Notes">${escapeHtml(record.notes || "-")}</td>
@@ -1818,7 +1816,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
             ["Booking grade", record.walk_grade],
             ["Walk number / ID", walkId],
             ["Walk name", masterValues.name],
-            ["Leader(s)", record.leader_name],
+            ["Leader(s)", bookingLeaderLabel(record)],
             ["Pueblo", masterValues.pueblo],
             ["Programme comments", record.comments, true],
             ["Notes for programme team", record.notes, true]
@@ -1827,7 +1825,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           const routeFields = route ? [
             ["Route name", route.Route_Name],
             ["Route grade", route.Grade],
-            ["Permitted leaders", String(route.Permitted_Leaders || "").split(",").map((n) => n.trim()).filter(Boolean).join(", ")],
+            ["Permitted leaders", (Array.isArray(route.permitted_leader_ids) ? route.permitted_leader_ids : String(route.permitted_leader_ids || "").split(",")).map((id) => leaderFullName(findLeader(String(id).trim()))).filter(Boolean).join(", ")],
             [adjLabel(record, ["Distance"], "Distance"), route.Distance],
             [adjLabel(record, ["Ascent"], "Ascent"), route.Ascent],
             [adjLabel(record, ["Terrain"], "Terrain"), route.Terrain],
@@ -2337,7 +2335,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         leaderLines.length > 1 ? "Leaders:" : "Leader:",
         leaderLines.length
           ? leaderLines.map((line) => `<span class="leader-line">${line}</span>`).join("")
-          : escapeHtml(d.record.leader_name || "–")
+          : escapeHtml(bookingLeaderLabel(d.record) || "–")
       );
 
       const organiser = [
@@ -2464,7 +2462,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
     /* ========================================================= BOOKING CHANGE REQUESTS =========================================================
        Leaders ask for changes or cancellations to live walks. An admin approves or rejects each one.
        Stored in booking_requests/{request_id}. The walk itself only changes on approval. */
-    const BR_LABELS = { start_time: "Start time", comments: "Programme comments", notes: "Notes for the team", leader_name: "Leaders" };
+    const BR_LABELS = { start_time: "Start time", comments: "Programme comments", notes: "Notes for the team", leader_ids: "Leaders" };
     const brLeaderName = (l) => `${l?.first_name || ""} ${l?.surname || ""}`.trim();
     const pendingRequestFor = (key) => Object.values(bookingRequests).find((r) => r && r.status === "pending" && r.booking_key === key) || null;
     function lastRejectedRequestFor(key) {
@@ -2555,7 +2553,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       // Leader View: the requester must be listed on the booking. Other views keep the name check.
       if (currentView === "leader") {
         if (!leaderOwnsRecord(record)) return alert("You can only ask for changes to bookings you lead.");
-      } else if (record.leader_name && record.leader_name !== brLeaderName(leader)) {
+      } else if (bookingLeaderIds(record).length && !bookingLeaderIds(record).map(String).includes(String(leader.leader_id))) {
         return alert("You can only ask for changes to walks you lead.");
       }
       if (!reason) return alert("Please give a description of the required changes.");
@@ -2579,12 +2577,12 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         if (ids.some((id) => !allowedForWalk.includes(id))) return alert("Leaders must be the walk's owner or a permitted leader.");
         if (ids.join(",") !== bookingLeaderIds(record).map(String).join(",")) {
           changes.leader_ids = ids;
-          changes.leader_name = ids.map((id) => leaderFullName(findLeader(id))).join(", ");
         }
         // The instructions box is enough on its own: the other fields may stay as they are
       }
       const before = {};
       Object.keys(changes).forEach((k) => { before[k] = record[k] ?? ""; });
+      if (changes.leader_ids) before.leader_ids = bookingLeaderIds(record);
       const id = `${key}_${Date.now()}`;
       saveBookingRequest(id, {
         request_id: id,
@@ -2618,7 +2616,11 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         const what = r.type === "cancel"
           ? "<p><strong>Asks to cancel this walk.</strong></p>"
           : !Object.keys(r.changes || {}).length ? `<p class="muted">Description only. No fields are changed.</p>`
-          : `<ul class="change-list">${Object.entries(r.changes || {}).filter(([k]) => k !== "leader_ids").map(([k, v]) => {
+          : `<ul class="change-list">${Object.entries(r.changes || {}).map(([k, v]) => {
+              if (k === "leader_ids") {
+                const names = (ids) => (ids || []).map((id) => leaderFullName(findLeader(id))).filter(Boolean).join(", ");
+                return `<li><strong>Leaders:</strong> ${escapeHtml(names(r.before?.leader_ids) || "(blank)")} → ${escapeHtml(names(v) || "(blank)")}</li>`;
+              }
               return `<li><strong>${escapeHtml(BR_LABELS[k] || k)}:</strong> ${escapeHtml(r.before?.[k] || "(blank)")} → ${escapeHtml(v || "(blank)")}</li>`;
             }).join("")}</ul>`;
         return `<div class="booking-request-item">
@@ -2661,7 +2663,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       openBookingModal(rec.date, rec.walk_grade, { ...rec, ...(r.changes || {}) }, rec.walk_number);
       document.getElementById("modal-heading").textContent = `Review change request: ${r.requested_by_name || r.requested_by || "leader"}`;
       // Amber border on each field the leader changed
-      const fieldIds = { start_time: "input-start-time", comments: "input-comments", notes: "input-notes", leader_name: "input-leader" };
+      const fieldIds = { start_time: "input-start-time", comments: "input-comments", notes: "input-notes" };
       Object.keys(r.changes || {}).forEach((k) => {
         const el = fieldIds[k] && document.getElementById(fieldIds[k]);
         if (el) { el.style.border = "2px solid #f59e0b"; el.style.background = "#fffbeb"; el.title = `Leader asked for this. Was: ${r.before?.[k] || "(blank)"}`; }
@@ -2672,6 +2674,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       const r = bookingRequests[brReviewId];
       brReviewId = null;
       if (!r || r.status !== "pending") return;
+      // Leaders are recorded by leader_ids and are not counted as overrides
       const keys = Object.keys(r.changes || {}).filter((k) => k !== "leader_ids");
       const reviewed = {};
       keys.forEach((k) => { reviewed[k] = payload[k] ?? ""; });
@@ -3297,7 +3300,6 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           walk_name: walkName,
           leader_ids: leaderCheck.ids,
           leader_id: leaderCheck.ids[0],
-          leader_name: leaderCheck.ids.map((id) => leaderFullName(findLeader(id))).join(", "),
           pueblo: document.getElementById("input-pueblo").value.trim(),
           comments: document.getElementById("input-comments").value.trim(),
           notes: document.getElementById("input-notes").value.trim(),
@@ -3461,11 +3463,11 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       const body = document.getElementById("leader-stats-body");
       body.innerHTML = "";
       const leaders = [
-        ...new Set(data.map((item) => item.leader_name).filter(Boolean)),
+        ...new Set(data.map((item) => bookingLeaderLabel(item)).filter(Boolean)),
       ].sort();
       const grandTotals = {E: 0, M: 0, MS: 0, S: 0, VS: 0};
       leaders.forEach((leader) => {
-        const leaderData = data.filter((item) => item.leader_name === leader);
+        const leaderData = data.filter((item) => bookingLeaderLabel(item) === leader);
         const counts = {};
         grades.forEach((grade) => {
           counts[grade] = leaderData.filter(
@@ -3525,7 +3527,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
             </td>
 
             <td>
-                ${item.leader_name || "-"}
+                ${bookingLeaderLabel(item) || "-"}
             </td>
 
             <td>
@@ -3676,7 +3678,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           `Dogs: ${dash(route.Dogs)}`,
         ].join("\n");
 
-        const leaderParts = [`Leader: ${pdfLine(dash(leader ? leaderFullName(leader) : r.leader_name))}`];
+        const leaderParts = [`Leader: ${pdfLine(dash(leader ? leaderFullName(leader) : bookingLeaderLabel(r)))}`];
         if (leader) {
           [leader.phone_1, leader.phone_2].map(txt).filter(Boolean).forEach((p) => leaderParts.push(p));
         }
@@ -3838,7 +3840,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
             r.walk_grade,
             r.walk_number || "",
             r.walk_name || "",
-            r.leader_name || "",
+            bookingLeaderLabel(r),
             r.pueblo || "",
             r.comments || "",
             r.notes || "",
@@ -4258,7 +4260,7 @@ WALK DATA TABLE SORTING
           return gradeSortOrder[item.walk_grade] || 99;
 
         case "leader_name":
-          return (item.leader_name || "").toLowerCase();
+          return bookingLeaderLabel(item).toLowerCase();
 
         case "pueblo":
           return (item.pueblo || "").toLowerCase();
