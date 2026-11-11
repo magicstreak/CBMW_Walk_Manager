@@ -1,10 +1,11 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, update, remove, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
-    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { getDatabase, ref, get, set, update, remove, onValue, query, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getAuth, signInAnonymously, initializeAuth, inMemoryPersistence, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
     /* ========================================================= SETUP ========================================================= */
     // The single cbmw-portal database: reads walk_bookings for delete checks, reads/writes leaders and leader_requests.
 import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
+import { ensureSignedIn, isStaff, showStaffNotice, STAFF_APP_NAME, accountRoles, allowedView, redirectToView } from "./cbmw-auth.js";
 
     // View comes from the hosting page: ?view=walker | leader | admin (default walker).
     // Leader view also takes ?leader_id=101 so the page knows who is asking. Without it, the leader picks their name.
@@ -18,7 +19,17 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
     let myLeaderId = isLeader ? (params.get("leader_id") || "") : "";
 
     let db = null;
-    let leaders = [];          // sorted by leader_id
+    // Admin rights, read by admins only: shown as an "Admin" badge in the admin list
+    let adminFlags = {};       // admins/{uid} = true
+    let accountLinks = {};     // leader_accounts/{uid} = leader ID
+    function isAdminLeader(leaderId) {
+      if (!isAdmin) return false;
+      return Object.keys(accountLinks).some((uid) => String(accountLinks[uid]) === String(leaderId) && adminFlags[uid] === true);
+    }
+    let leaders = [];          // sorted by leader_id (full list for admins; names plus own record for leaders)
+    let leaderFull = false;    // true once the full directory has loaded (admins only)
+    let leaderNames = [];      // leader_names: names and public key, readable by any signed-in leader
+    let ownRecord = null;      // the signed-in leader's own full record
     let requests = {};         // leader_requests/{id}
     let bookings = {};         // walk_bookings (read only, used for delete checks)
 
@@ -72,7 +83,7 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
       document.getElementById("add-leader").hidden = !isAdmin;
       document.getElementById("actions-head").hidden = !isAdmin;
       document.getElementById("pending-panel").hidden = !isAdmin;
-      document.getElementById("picker-wrap").hidden = !isLeader || !!params.get("leader_id");
+      document.getElementById("picker-wrap").hidden = true; // identity comes from sign-in
     }
 
     function renderPicker() {
@@ -168,7 +179,7 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
         return `<tr class="${mine ? "is-me" : ""}">
           ${isAdmin ? `<td class="actions-cell">${actions}</td>` : ""}
           <td class="id-cell" data-label="ID">${escapeHtml(l.leader_id)}</td>
-          <td data-label="Name">${escapeHtml(fullName(l))}${mine ? ` <span class="muted">(you)</span>` : ""}${waiting && VIEW !== "walker" ? ` <span class="pill pill-pending">Change pending</span>` : ""}${requestBtn}</td>
+          <td data-label="Name">${escapeHtml(fullName(l))}${mine ? ` <span class="muted">(you)</span>` : ""}${isAdminLeader(l.leader_id) ? ` <span class="pill" style="background:#e8f0fe;color:#1a3d8f">Admin</span>` : ""}${waiting && VIEW !== "walker" ? ` <span class="pill pill-pending">Change pending</span>` : ""}${requestBtn}</td>
           ${VIEW === "walker" ? "" : `<td data-label="Display name">${escapeHtml(str(l.display_name) || "–")}</td>`}
           <td data-label="Phones">${[l.phone_1, l.phone_2].filter((n) => str(n)).map((n) => `<a href="tel:${escapeHtml(str(n).replace(/[^\d+]/g, ""))}">${escapeHtml(str(n))}</a>`).join(", ") || "–"}</td>
           ${isLeader ? "" : `<td data-label="Email">${l.email_add ? `<a href="mailto:${escapeHtml(l.email_add)}">${escapeHtml(l.email_add)}</a>` : "–"}</td>`}
@@ -316,6 +327,12 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
           : leader?.[f.key] ?? "";
         return fieldHtml(f, value, f.key === "leader_id" && mode === "edit");
       }).join("");
+      // Admin edit: sign-in and admin rights panel, below the fields
+      document.getElementById("signin-panel")?.remove();
+      if (mode === "edit" && isAdmin) {
+        document.getElementById("form-fields").insertAdjacentHTML("afterend", '<div id="signin-panel" style="grid-column:1/-1;border-top:1px solid #ddd;padding-top:.75rem;margin-top:.5rem"><p class="hint">Loading sign-in...</p></div>');
+        renderSignInPanel(leader).catch((err) => console.error("Could not load sign-in:", err));
+      }
       modal.hidden = false;
       document.getElementById(mode === "create" ? "f-leader_id" : "f-first_name")?.focus();
     }
@@ -355,6 +372,155 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
       return record;
     }
 
+    /* ========================================================= CONTACT COPY =========================================================
+       Walkers see a leader's contact details on a booking by a random key, not by leader ID.
+       leader_contacts/{key} holds only the contact details, and is kept in step with the leader record here. */
+    const CONTACT_FIELDS = ["display_name", "first_name", "surname", "email_add", "phone_1", "phone_2", "whats_app"];
+    const randomKey = () => {
+      const bytes = crypto.getRandomValues(new Uint8Array(12));
+      return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    };
+    // Admin only: a leader with an email address but no sign-in gets one. They are sent an email to set their password.
+    // The account is made on a separate, memory-only connection, so the admin stays signed in.
+    let accountAuth = null;
+    function accountMaker() {
+      if (!accountAuth) {
+        const accountApp = initializeApp(firebaseConfig, "cbmwAccountMaker");
+        accountAuth = initializeAuth(accountApp, { persistence: inMemoryPersistence });
+      }
+      return accountAuth;
+    }
+    async function ensureLeaderSignIn(leaderId) {
+      if (!isAdmin) return;
+      const id = String(leaderId);
+      if (id === "0") return;
+      const leaderSnap = await get(ref(db, "leaders/" + id));
+      const l = leaderSnap.val();
+      const email = String(l?.email_add || "").trim().toLowerCase();
+      if (!email) return;
+      const linksSnap = await get(ref(db, "leader_accounts"));
+      const linked = Object.values(linksSnap.val() || {}).map(String);
+      if (linked.includes(id)) return;
+      const auth2 = accountMaker();
+      try {
+        const cred = await createUserWithEmailAndPassword(auth2, email, randomKey() + randomKey());
+        await update(ref(db), { ["leader_accounts/" + cred.user.uid]: id });
+        await sendPasswordResetEmail(auth2, email);
+        await signOut(auth2);
+      } catch (err) {
+        if (err.code === "auth/email-already-in-use") {
+          alert(`${email} already has a sign-in that is not linked to this leader. Ask for the setup script to link it.`);
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    // Names-only copy for the shared list. Leaders can read it; contact details stay in the protected record.
+    async function publishName(leaderId, record, key) {
+      await set(ref(db, "leader_names/" + leaderId), {
+        leader_id: String(leaderId),
+        first_name: record.first_name || "",
+        surname: record.surname || "",
+        public_key: key,
+      });
+    }
+
+    async function publishContact(leaderId) {
+      const snap = await get(ref(db, "leaders/" + leaderId));
+      if (!snap.exists()) return;
+      const l = snap.val();
+      let key = l.public_key;
+      if (!key) {
+        key = randomKey();
+        await update(ref(db, "leaders/" + leaderId), { public_key: key });
+      }
+      const contact = {};
+      for (const f of CONTACT_FIELDS) if (l[f] !== undefined && l[f] !== null && l[f] !== "") contact[f] = l[f];
+      await set(ref(db, "leader_contacts/" + key), contact);
+      await publishName(leaderId, l, key);
+      try {
+        await ensureLeaderSignIn(leaderId);
+      } catch (err) {
+        console.error("Could not create sign-in:", err);
+        alert("The leader was saved, but their sign-in could not be created: " + (err?.message || err));
+      }
+    }
+    async function removeContact(leaderId) {
+      const snap = await get(ref(db, "leaders/" + leaderId));
+      const key = snap.exists() ? snap.val().public_key : null;
+      if (key) await remove(ref(db, "leader_contacts/" + key));
+      await remove(ref(db, "leader_names/" + leaderId)).catch(() => {});
+    }
+
+    /* ========================================================= SIGN-IN AND ADMIN RIGHTS (admin only) =========================================================
+       A leader's sign-in is the link in leader_accounts. Admin rights are the admins list.
+       The last admin can never be removed, so the club cannot lock itself out. Removing any admin asks first. */
+    async function signInUidFor(leaderId) {
+      const links = (await get(ref(db, "leader_accounts"))).val() || {};
+      return Object.keys(links).find((uid) => String(links[uid]) === String(leaderId)) || null;
+    }
+    async function adminCount() {
+      const admins = (await get(ref(db, "admins"))).val() || {};
+      return Object.values(admins).filter((v) => v === true).length;
+    }
+    async function isAdminUid(uid) {
+      return (await get(ref(db, "admins/" + uid))).val() === true;
+    }
+    // Unlinks a sign-in (and its admin rights). Returns false if the admin cancels. Throws if it would remove the last admin.
+    async function unlinkSignIn(uid, intro = "") {
+      const wasAdmin = await isAdminUid(uid);
+      if (wasAdmin && (await adminCount()) <= 1) throw new Error("This is the last admin, so it cannot be removed. Make another leader an admin first.");
+      if (wasAdmin && !confirm(`${intro ? intro + "\n\n" : ""}This sign-in is an admin. Remove its admin rights as well?`)) return false;
+      if (!wasAdmin && intro && !confirm(intro + "\n\nContinue?")) return false;
+      const patch = { ["leader_accounts/" + uid]: null };
+      if (wasAdmin) patch["admins/" + uid] = null;
+      await update(ref(db), patch);
+      return true;
+    }
+    async function renderSignInPanel(leader) {
+      const panel = document.getElementById("signin-panel");
+      if (!panel) return;
+      const uid = await signInUidFor(leader.leader_id);
+      const admin = uid ? await isAdminUid(uid) : false;
+      const current = document.getElementById("signin-panel");
+      if (!current) return; // dialog closed while loading
+      current.dataset.uid = uid || "";
+      current.innerHTML = uid
+        ? `<p class="hint"><strong>Sign-in:</strong> linked. Its email is the leader's email above.</p>
+           <label style="display:flex;gap:.5rem;align-items:center;margin:.4rem 0"><input type="checkbox" id="signin-admin" ${admin ? "checked" : ""} /> Admin: can change walks, leaders and sign-ins</label>
+           <button type="button" class="btn btn-small btn-danger" id="signin-remove">Remove sign-in</button>`
+        : `<p class="hint"><strong>Sign-in:</strong> none yet. Saving an email address above creates one and emails a link to set a password.</p>`;
+    }
+    async function changeAdminFromDialog(box) {
+      const uid = document.getElementById("signin-panel")?.dataset.uid;
+      if (!uid) return;
+      try {
+        if (!box.checked) {
+          if ((await adminCount()) <= 1) throw new Error("This is the last admin, so admin rights cannot be removed. Make another leader an admin first.");
+          const name = dialogLeader ? fullName(dialogLeader) : "this leader";
+          if (!confirm(`Remove admin rights from ${name}?`)) { box.checked = true; return; }
+        }
+        await set(ref(db, "admins/" + uid), box.checked ? true : null);
+      } catch (err) {
+        box.checked = !box.checked;
+        alert(err.message || "Could not change admin rights.");
+      }
+    }
+    async function removeSignInFromDialog() {
+      const uid = document.getElementById("signin-panel")?.dataset.uid;
+      if (!uid || !dialogLeader) return;
+      try {
+        const done = await unlinkSignIn(uid, `Remove the sign-in for ${fullName(dialogLeader)}? They will no longer be able to change anything. Their account stays in Firebase Authentication until it is deleted in the Firebase console.`);
+        if (done === false) return;
+        await renderSignInPanel(dialogLeader);
+      } catch (err) {
+        alert(err.message || "Could not remove the sign-in.");
+      }
+    }
+    modal.addEventListener("click", (e) => { if (e.target.closest("#signin-remove")) removeSignInFromDialog(); });
+    modal.addEventListener("change", (e) => { if (e.target.id === "signin-admin") changeAdminFromDialog(e.target); });
+
     /* ========================================================= ACTIONS ========================================================= */
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -368,10 +534,25 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
           if (mode === "edit" && !isAdmin) {
             // A leader's own details save straight away, without an admin approval step
             await update(ref(db, "leaders/" + record.leader_id), record);
+            await publishContact(record.leader_id);
           } else {
             const waitingFor = Object.values(requests).filter((r) => r && r.status === "pending" && String(r.leader_id) === String(record.leader_id));
             if (mode === "edit" && waitingFor.length && !confirm("This leader has a change waiting for approval. Save anyway?")) return;
-            await set(ref(db, "leaders/" + record.leader_id), record);
+            // Edits update the record, so the leader's public key is kept. A new leader is set in full.
+            if (mode === "edit") {
+              // A changed email replaces the sign-in: the old one is unlinked, then a new one is made for the new address
+              const emailChanged = dialogLeader && str(dialogLeader.email_add).toLowerCase() !== record.email_add.toLowerCase();
+              if (emailChanged) {
+                const uid = await signInUidFor(record.leader_id);
+                if (uid) {
+                  const done = await unlinkSignIn(uid, "The email change will remove this leader's current sign-in and create a new one for the new address.");
+                  if (done === false) return;
+                }
+              }
+              await update(ref(db, "leaders/" + record.leader_id), record);
+            }
+            else await set(ref(db, "leaders/" + record.leader_id), record);
+            await publishContact(record.leader_id);
           }
         } else {
           const current = dialogLeader;
@@ -480,6 +661,7 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
         const message = `Delete ${fullName(leader)} (ID ${leader.leader_id})?${notes.length ? "\n\n" + notes.join("\n") : ""}`;
         if (!confirm(message)) return;
         try {
+          await removeContact(leader.leader_id);
           await remove(ref(db, "leaders/" + leader.leader_id));
           await Promise.all(pendingReqs.map((r) => remove(ref(db, "leader_requests/" + r.request_id)))).catch(() => {});
         } catch (err) {
@@ -502,6 +684,7 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
           if (!leader) return alert("This leader no longer exists, so the change cannot be applied. Reject the request instead.");
           if (!confirm(`Approve this change for ${fullName(leader)}?`)) return;
           await update(ref(db, "leaders/" + request.leader_id), request.changes);
+          await publishContact(request.leader_id);
           await update(ref(db, "leader_requests/" + request.request_id), {
             status: "approved",
             reviewed_at: new Date().toISOString(),
@@ -523,24 +706,75 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
     });
 
     /* ========================================================= DATA ========================================================= */
+    // Leader view: the signed-in account's leader ID (leader_accounts/{uid}) says who is leading
+    async function identifyFromAccount(user) {
+      try {
+        const snap = await get(ref(db, "leader_accounts/" + user.uid));
+        myLeaderId = snap.exists() ? String(snap.val()) : "";
+      } catch (err) {
+        console.error("Could not read leader account:", err);
+        myLeaderId = "";
+      }
+      ownRecord = null;
+      if (myLeaderId) {
+        try {
+          const own = await get(ref(db, "leaders/" + myLeaderId));
+          if (own.exists()) ownRecord = own.val();
+        } catch (err) {
+          console.error("Could not read own leader record:", err);
+        }
+      }
+      if (!leaderFull) mergeLeaders();
+      renderAll();
+    }
+
+    function byLeaderId(list) {
+      return list.sort((a, b) => Number(a.leader_id) - Number(b.leader_id));
+    }
+    // Leaders see the names list; their own entry is filled in with their full record
+    function mergeLeaders() {
+      leaders = byLeaderId(leaderNames.map((n) =>
+        ownRecord && String(n.leader_id) === String(myLeaderId) ? { ...n, ...ownRecord } : n));
+      renderAll();
+    }
+
+    // Request lists: staff read them all; a leader reads only the requests they made (the rules allow nothing else)
+    let stopRequests = null;
+    function subscribeRequests() {
+      if (stopRequests) { stopRequests(); stopRequests = null; }
+      if (!isAdmin && !myLeaderId) { requests = {}; renderAll(); return; }
+      const base = ref(db, "leader_requests");
+      const source = VIEW === "admin" ? base : query(base, orderByChild("leader_id"), equalTo(String(myLeaderId)));
+      stopRequests = onValue(source, (snapshot) => {
+        requests = snapshot.val() || {};
+        renderAll();
+      }, (error) => console.error("Unable to load change requests:", error));
+    }
+
     function start() {
       setupPage();
       if (!db) {
         document.getElementById("leaders-body").innerHTML = `<tr><td colspan="9" class="empty">The database could not be reached.</td></tr>`;
         return;
       }
+      // Full directory: admins only. Leaders are refused here and use the names list below.
       onValue(ref(db, "leaders"), (snapshot) => {
-        const data = snapshot.val() || {};
-        leaders = Object.values(data).filter(Boolean)
-          .sort((a, b) => Number(a.leader_id) - Number(b.leader_id));
-        if (leaders.length) applySavedLeaderEmail();
+        leaderFull = true;
+        leaders = byLeaderId(Object.values(snapshot.val() || {}).filter(Boolean));
         renderAll();
-      }, (error) => console.error("Unable to load leaders:", error));
+      }, () => { /* not an admin: the names list is used instead */ });
 
-      onValue(ref(db, "leader_requests"), (snapshot) => {
-        requests = snapshot.val() || {};
-        renderAll();
-      }, (error) => console.error("Unable to load change requests:", error));
+      if (isAdmin) {
+        onValue(ref(db, "admins"), (snapshot) => { adminFlags = snapshot.val() || {}; renderTable(); }, (error) => console.error("Unable to load admins:", error));
+        onValue(ref(db, "leader_accounts"), (snapshot) => { accountLinks = snapshot.val() || {}; renderTable(); }, (error) => console.error("Unable to load sign-ins:", error));
+      }
+
+      onValue(ref(db, "leader_names"), (snapshot) => {
+        leaderNames = Object.values(snapshot.val() || {}).filter(Boolean);
+        if (!leaderFull) mergeLeaders();
+      }, (error) => console.error("Unable to load leader names:", error));
+
+      subscribeRequests();
 
       // Read only: used to warn before a leader is deleted
       onValue(ref(db, "walk_bookings"), (snapshot) => {
@@ -549,10 +783,10 @@ import { firebaseConfig as firebaseConfig } from "./firebase-config.js";
     }
 
     try {
-      const app = initializeApp(firebaseConfig, "leadersApp");
+      const app = initializeApp(firebaseConfig, STAFF_APP_NAME);
       db = getDatabase(app);
       const auth = getAuth(app);
-      signInAnonymously(auth).then(start).catch((err) => {
+      ensureSignedIn(auth).then(async (user) => { const wanted = allowedView(VIEW, await accountRoles(db, user)); if (wanted !== VIEW) { redirectToView(wanted); return new Promise(() => {}); } if (VIEW !== "walker") showStaffNotice(user); if (isLeader && isStaff(user)) await identifyFromAccount(user); }).then(start).catch((err) => {
         console.error("Anonymous sign-in failed:", err);
         start();
       });

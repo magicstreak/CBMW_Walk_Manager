@@ -6,8 +6,12 @@
       onValue,
       remove,
       get,
+      query,
+      orderByChild,
+      equalTo,
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
     import {getAuth, signInAnonymously} from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+import {ensureSignedIn, isStaff, showStaffNotice, STAFF_APP_NAME, accountRoles, allowedView, redirectToView} from "./cbmw-auth.js";
       /* ========================================================= FIREBASE CONFIG ========================================================= */
 // Programme planning database (cbmw-portal): bookings, leaders, walks and requests
 import { firebaseConfig as firebaseConfigWalks } from "./firebase-config.js";
@@ -19,15 +23,24 @@ let isWalksFirebaseActive = false;
 
 // Anonymous sign-in for both projects. Data is read only after this finishes.
 const authSignIns = [];
+let staffUser = null;
+let staffIsAdmin = false;
 
 // One database now holds everything (bookings, leaders, walks), so both names point at the same connection.
 try {
-  const plannerApp = initializeApp(firebaseConfigWalks, "cbmwProgrammePlanning");
+  const plannerApp = initializeApp(firebaseConfigWalks, STAFF_APP_NAME);
   db = getDatabase(plannerApp);
   dbWalks = db;
   isFirebaseActive = true;
   isWalksFirebaseActive = true;
-  authSignIns.push(signInAnonymously(getAuth(plannerApp)));
+  authSignIns.push(ensureSignedIn(getAuth(plannerApp)).then(async (user) => {
+  staffUser = user;
+  const roles = await accountRoles(db, user);
+  staffIsAdmin = roles.isAdmin;
+  const requested = VIEW_FROM_HOST || "walker";
+  const wanted = allowedView(requested, roles);
+  if (wanted !== requested) { redirectToView(wanted); return new Promise(() => {}); }
+}));
   console.log("Programme planning Firebase connected.");
 } catch (err) {
   console.error("Programme planning Firebase startup failed.", err);
@@ -35,7 +48,9 @@ try {
 
 // Resolves when both sign-ins have finished (failures are logged, so the app still loads)
 const authReady = Promise.allSettled(authSignIns).then((results) => {
-  results.forEach((r) => { if (r.status === "rejected") console.error("Anonymous sign-in failed:", r.reason); });
+  results.forEach((r) => { if (r.status === "rejected") console.error("Sign-in failed:", r.reason); });
+  if (currentView !== "walker") showStaffNotice(staffUser);
+  if (currentView === "leader" && isStaff(staffUser)) identifyFromAccount(staffUser);
 });
       /* ========================================================= GLOBAL VARIABLES ========================================================= */ const grades =
       ["E", "M", "MS", "S", "VS"];
@@ -168,20 +183,46 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       VS: "#111827",
     };
       /* ========================================================= DATA SYNC ========================================================= */
+    // Booking requests: staff read them all; a leader reads only the requests they made (the rules allow nothing else)
+    let stopBookingRequests = null;
+    function subscribeBookingRequests() {
+      if (!db) return;
+      if (stopBookingRequests) { stopBookingRequests(); stopBookingRequests = null; }
+      if (currentView !== "admin" && !myLeaderId) { bookingRequests = {}; renderBookingRequestsPanel(); return; }
+      const base = ref(db, "booking_requests");
+      const source = currentView === "admin" ? base : query(base, orderByChild("requested_by"), equalTo(String(myLeaderId)));
+      stopBookingRequests = onValue(source, (snapshot) => {
+        bookingRequests = snapshot.val() || {};
+        renderBookingRequestsPanel();
+        refreshOpenDetailCard();
+      }, (error) => console.error("Unable to load booking requests:", error));
+    }
+
     function initDataSync() {
       // Leaders: read from the "leaders" path and kept as a list sorted by leader_id.
       if (isFirebaseActive) {
         onValue(ref(db, "leaders"), (snapshot) => {
           const data = snapshot.val() || {};
           LEADER_LOOKUP = Object.values(data).sort((a, b) => Number(a.leader_id) - Number(b.leader_id));
+          LEADER_FULL_LIST = true;
           // Refresh the open booking modal's dropdown, keeping the current choice
           refreshLeaderOptions();
-          if (LEADER_LOOKUP.length) applySavedLeaderEmail();
+          // Leader identity comes from sign-in (see identifyFromAccount)
           // Do not re-render the table while someone is editing a row inline
           if (!editingOfferKey) renderAdminTable();
-        }, (error) => {
-          console.error("Unable to load leaders:", error);
-        });
+        }, () => { /* leaders cannot read the full list: they use leader_names below */ });
+
+        // Names only (no contact details): everyone signed in can read this list
+        onValue(ref(db, "leader_names"), (snapshot) => {
+          if (LEADER_FULL_LIST) return; // admins already have the full list
+          LEADER_LOOKUP = Object.values(snapshot.val() || {}).filter(Boolean)
+            .sort((a, b) => Number(a.leader_id) - Number(b.leader_id));
+          refreshLeaderOptions();
+          renderCalendar();
+          refreshOpenDetailCard();
+          renderAdminTable();
+          renderBookingRequestsPanel();
+        }, (error) => console.error("Unable to load leader names:", error));
       }
 
       // Social events: own database path, shown in every view, changed from Admin View only.
@@ -200,11 +241,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
 
       // Booking database remains the source of scheduled dates and booking fields.
       if (isFirebaseActive) {
-        onValue(ref(db, "booking_requests"), (snapshot) => {
-          bookingRequests = snapshot.val() || {};
-          renderBookingRequestsPanel();
-          refreshOpenDetailCard();
-        }, (error) => console.error("Unable to load booking requests:", error));
+        subscribeBookingRequests();
 
         onValue(ref(db, "walk_messages"), (snapshot) => {
           walkMessages = snapshot.val() || {};
@@ -475,6 +512,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
        Loaded live from the "leaders" database path (see initDataSync). Keyed by leader_id.
        linked_leader holds another leader's leader_id (e.g. a co-leader). */
     let LEADER_LOOKUP = [];
+    let LEADER_FULL_LIST = false; // true once the full leaders list (admins only) has loaded
 
     function leaderFullName(leader) {
       return leader ? `${leader.first_name || ""} ${leader.surname || ""}`.trim() : "";
@@ -490,8 +528,21 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       return bookingLeaderIds(record).map((id) => leaderDisplayName(findLeader(id))).filter(Boolean);
     }
 
+    // Contact details for a booking's leaders, read by their random key. Cached; re-renders the open card when they arrive.
+    const contactCache = new Map();
+    const contactPending = new Set();
+    function requestContact(key) {
+      if (!key || contactCache.has(key) || contactPending.has(key)) return;
+      contactPending.add(key);
+      get(ref(db, "leader_contacts/" + key)).then((snap) => {
+        contactCache.set(key, snap.exists() ? snap.val() : {});
+        contactPending.delete(key);
+        if (openCardKey) renderDetailCard();
+      }).catch(() => { contactPending.delete(key); });
+    }
+
     function findLeader(leaderId) {
-      return LEADER_LOOKUP.find((l) => l.leader_id === leaderId) || null;
+      return LEADER_LOOKUP.find((l) => String(l.leader_id) === String(leaderId)) || null;
     }
 
     // The booking's main leader ID
@@ -506,8 +557,9 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       if (!walk) return null;
       // Owner plus permitted leaders, as leader IDs
       const raw = [walk.owner_leader_id, ...(Array.isArray(walk.permitted_leader_ids) ? walk.permitted_leader_ids : String(walk.permitted_leader_ids || "").split(","))];
+      // The full list is only available to admins, so filter by it only when it has been loaded
       const known = new Set(LEADER_LOOKUP.map((l) => String(l.leader_id)));
-      const ids = [...new Set(raw.map((id) => String(id ?? "").trim()).filter((id) => id && known.has(id)))];
+      const ids = [...new Set(raw.map((id) => String(id ?? "").trim()).filter((id) => id && id !== "0" && id !== "undefined" && (!LEADER_LOOKUP.length || known.has(id))))];
       return ids.length ? ids : null;
     }
 
@@ -532,7 +584,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       const walkNo = document.getElementById("input-walk-no")?.value.trim() || "";
       const allowed = permittedLeaderIds(walkNo);
       return LEADER_LOOKUP
-        .filter((l) => !allowed || allowed.includes(l.leader_id))
+        .filter((l) => !allowed || allowed.includes(String(l.leader_id)))
         .map((l) => leaderFullName(l));
     }
 
@@ -612,7 +664,11 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       }
       if (isFirebaseActive) {
 
-        set(ref(db, "walk_bookings/" + key), data);
+        // Drop undefined values (Firebase refuses them), and tell the user if the write is refused
+        set(ref(db, "walk_bookings/" + key), data === null ? null : JSON.parse(JSON.stringify(data))).catch((err) => {
+          console.error("Booking not saved:", err);
+          alert("This booking could not be saved: " + (err?.message || err));
+        });
       } else {
         localStorage.setItem(
           "global_walk_bookings",
@@ -623,12 +679,35 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         updateStatistics();
       }
     }
-      /* ========================================================= CLEAR ALL ========================================================= */ function clearAllRecords() {
-      if (!confirm("Are you sure you want to delete every walk booking? Social events are kept.")) {
+      /* ========================================================= CLEAR ALL ========================================================= */ function downloadBookingsBackup() {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const blob = new Blob([JSON.stringify(globalBookings, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `cbmw-bookings-backup-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    function clearAllRecords() {
+      const count = Object.keys(globalBookings || {}).length;
+      if (count === 0) { alert("There are no walk bookings to clear."); return; }
+      if (!confirm(`This will permanently delete all ${count} walk bookings. Social events are kept.\n\nA backup file is downloaded first.`)) return;
+      const typed = prompt(`To confirm, type CLEAR (in capitals) to delete all ${count} bookings.`);
+      if (typed !== "CLEAR") { alert("Nothing was deleted."); return; }
+      try {
+        downloadBookingsBackup();
+      } catch (err) {
+        alert("The backup could not be downloaded, so nothing was deleted: " + (err?.message || err));
         return;
       }
       if (isFirebaseActive) {
-        remove(ref(db, "walk_bookings"));
+        remove(ref(db, "walk_bookings")).catch((err) => {
+          console.error("Clear all bookings failed:", err);
+          alert("The bookings could not be cleared: " + (err?.message || err));
+        });
       } else {
         globalBookings = {};
         localStorage.removeItem("global_walk_bookings");
@@ -1380,6 +1459,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         start_time: startTime,
         leader_id: leaderRecord.leader_id,
         leader_ids: chosen.map((l) => l.leader_id),
+        leader_keys: chosen.map((l) => l.public_key).filter(Boolean),
         comments: form.elements.comments.value.trim(),
         notes: form.elements.notes.value.trim(),
         updated_at: new Date().toISOString(),
@@ -1431,6 +1511,20 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
     }
 
     // Leader View: find the leader by email. The email is never shown back.
+    // Leader view: the signed-in account's leader ID (leader_accounts/{uid}) says who is leading
+    async function identifyFromAccount(user) {
+      try {
+        const snap = await get(ref(db, "leader_accounts/" + user.uid));
+        myLeaderId = snap.exists() ? String(snap.val()) : "";
+      } catch (err) {
+        console.error("Could not read leader account:", err);
+        myLeaderId = "";
+      }
+      refreshLeaderActions();
+      renderAdminTable();
+      subscribeBookingRequests();
+    }
+
     function identifyLeaderByEmail() {
       const typed = String(document.getElementById("leader-email").value || "").trim().toLowerCase();
       const msg = document.getElementById("leader-identify-msg");
@@ -2319,18 +2413,21 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         const digits = String(p).replace(/[^\d+]/g, "");
         return `<a href="tel:${escapeHtml(digits)}">${escapeHtml(p)}</a>`;
       };
-      // Leader(s): one line per leader, stacked: name, phone 1, phone 2, WhatsApp badge
-      const leaderIds = bookingLeaderIds(d.record);
-      const leaderLines = leaderIds.map((id) => {
-        const leader = findLeader(id);
-        if (!leader) return "";
-        const phones = [leader.phone_1, leader.phone_2].filter((p) => String(p || "").trim()).map(phoneLink);
+      // Leader(s): one line per leader, stacked: name, phone 1, phone 2, WhatsApp badge.
+      // Contact details are read by the booking's leader keys, so the full leaders list is not needed here.
+      const leaderKeys = Array.isArray(d.record.leader_keys) ? d.record.leader_keys : [];
+      const contactLine = (c) => {
+        const name = String(c.display_name || "").trim() || `${c.first_name || ""} ${c.surname || ""}`.trim();
+        const phones = [c.phone_1, c.phone_2].filter((p) => String(p || "").trim()).map(phoneLink);
         return [
-          `<span class="leader-line-name">${escapeHtml(leaderDisplayName(leader))}</span>`,
+          `<span class="leader-line-name">${escapeHtml(name)}</span>`,
           ...phones,
-          leader.whats_app === "y" ? `<span class="whatsapp-pref">WhatsApp</span>` : "",
+          c.whats_app === "y" ? `<span class="whatsapp-pref">WhatsApp</span>` : "",
         ].filter(Boolean).join(" · ");
-      }).filter(Boolean);
+      };
+      const leaderLines = leaderKeys.length
+        ? leaderKeys.map((key) => { requestContact(key); const c = contactCache.get(key); return c && Object.keys(c).length ? contactLine(c) : ""; }).filter(Boolean)
+        : bookingLeaderIds(d.record).map((id) => { const leader = findLeader(id); return leader ? contactLine(leader) : ""; }).filter(Boolean);
       const leaderRows = walkInfoRow(
         leaderLines.length > 1 ? "Leaders:" : "Leader:",
         leaderLines.length
@@ -2859,7 +2956,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
     const MSG_TYPES = { date: "Change date", time: "Change time", leader: "Change leader", walk: "Change walk", other: "Other" };
     function msgAuthorName() {
       if (currentView === "admin") return "Admin";
-      const me = LEADER_LOOKUP.find((l) => String(l?.leader_id) === String(myLeaderId));
+      const me = findLeader(myLeaderId);
       return brLeaderName(me) || "A leader";
     }
     function msgWalkOptions() {
@@ -3088,6 +3185,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
     /* ========================================================= MODAL ========================================================= */
     function openBookingModal(dateString, grade, existingData = null, walkNum) {
       hideHoverCard();
+      setTimeout(refreshLeaderOptions, 0); // rebuild the Leader suggestions for every open, not only when a walk is typed
       let uniqueValue = null;
       const admin = dateString === "" && grade === "" && !existingData;
 
@@ -3299,6 +3397,7 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
           walk_id: walkNum.trim(),
           walk_name: walkName,
           leader_ids: leaderCheck.ids,
+          leader_keys: leaderCheck.ids.map((id) => findLeader(id)?.public_key).filter(Boolean),
           leader_id: leaderCheck.ids[0],
           pueblo: document.getElementById("input-pueblo").value.trim(),
           comments: document.getElementById("input-comments").value.trim(),
@@ -4052,9 +4151,13 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       }
 
       function setView(view) {
+        if (view === "admin" && !staffIsAdmin) {
+          alert("Admin view needs an admin sign-in.");
+          return;
+        }
         previewReturnView = null;
         currentView = view;
-        document.getElementById("leader-identify").hidden = view !== "leader";
+        document.getElementById("leader-identify").hidden = true; // identity comes from sign-in
         updatePreviewControls();
         document.getElementById("past-walks-label").hidden = view === "walker";
         editingOfferKey = null;

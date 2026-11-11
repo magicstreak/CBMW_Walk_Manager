@@ -1,11 +1,13 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, update, remove, onValue, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getDatabase, ref, set, update, remove, onValue, get, query, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
     /* ========================================================= SETUP ========================================================= */
     // Walks live in the cbmw-portal project (same as the Walk Scheduler's master walks).
     // Change requests are stored beside them in walk_requests. Walk bookings (calendar project) are read only, for delete checks.
 import { firebaseConfig as walksConfig } from "./firebase-config.js";
+import { ensureSignedIn, isStaff, showStaffNotice, STAFF_APP_NAME, accountRoles, allowedView, redirectToView } from "./cbmw-auth.js";
+// Leader identity now comes from the signed-in account (leader_accounts), not from a typed email
     // View comes from the hosting page: ?view=walker | leader | admin (default walker).
     // Leader view also takes ?leader_id=101 so requests are attributed to that leader; otherwise the leader picks an ID.
     const params = new URLSearchParams(window.location.search);
@@ -88,7 +90,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       .sort((a, b) => String(a.requested_at).localeCompare(String(b.requested_at)));
     const fullName = (l) => `${str(l?.first_name)} ${str(l?.surname)}`.trim();
     const leaderName = (id) => {
-      const l = leaders.find((x) => x.leader_id === id);
+      const l = leaders.find((x) => String(x.leader_id) === String(id));
       return l ? `${l.first_name || ""} ${l.surname || ""}`.trim() : "";
     };
     const sortById = (a, b) => a.id.localeCompare(b.id, undefined, { numeric: true });
@@ -217,7 +219,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       document.getElementById("add-walk").hidden = !isAdmin;
       document.getElementById("actions-head").hidden = VIEW === "walker";
       document.getElementById("pending-panel").hidden = !isAdmin;
-      document.getElementById("picker-wrap").hidden = !isLeader || !!params.get("leader_id");
+      document.getElementById("picker-wrap").hidden = true; // identity comes from sign-in
     }
 
     function renderPicker() {
@@ -389,6 +391,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
       if (!confirm(`Take ownership of walk ${w.id} (${w.Route_Name || "no name"})? It will be listed with ${myName} as leader.`)) return;
       try {
         await update(ref(walksDb, "walks/" + w.id), { owner_leader_id: String(me.leader_id) });
+        await publishWalkLeaders(w.id);
       } catch (err) {
         alert("This walk could not be taken on. Please try again, or ask an admin.");
       }
@@ -924,6 +927,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           for (const f of EDITABLE_FIELDS) data[f.key] = storedValue(f.key, record[f.key]);
           Object.assign(data, fileNameFields(files));
           await set(ref(walksDb, "walks/" + record.walk_key), data);
+        await publishWalkLeaders(record.walk_key);
           await saveFileChanges(record.walk_key, files);
         } else if (mode === "edit") {
           // update() keeps any fields this page does not manage
@@ -938,6 +942,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
             Object.assign(data, fileNameFields(files));
           }
           await update(ref(walksDb, "walks/" + dialogWalk.id), data);
+        await publishWalkLeaders(dialogWalk.id);
           await saveFileChanges(dialogWalk.id, files);
           if (req) {
             const overrides = Object.keys(req.changes || {})
@@ -1090,6 +1095,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
         if (!confirm(message)) return;
         try {
           await remove(ref(walksDb, "walks/" + walk.id));
+        await publishWalkLeaders(walk.id);
           await Promise.all([remove(ref(walksDb, "walk_gpx/" + walk.id)), remove(ref(walksDb, "walk_photos/" + walk.id))]).catch(() => {});
           await Promise.all(pendingFor(walk.id).map((r) => remove(ref(walksDb, "walk_requests/" + r.request_id)))).catch(() => {});
           expandedWalks.delete(walk.id);
@@ -1311,6 +1317,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
           if (owner) data.owner_leader_id = String(owner.leader_id);
           if (!data.permitted_leader_ids) data.permitted_leader_ids = [];
           await set(ref(walksDb, "walks/" + newKey), data);
+        await publishWalkLeaders(newKey);
           await Promise.all(fileWrites);
           await update(ref(walksDb, "walk_requests/" + request.request_id), {
             status: "approved",
@@ -1336,6 +1343,7 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
             else data[key] = storedValue(key, value);
           }
           await update(ref(walksDb, "walks/" + request.walk_id), data);
+        await publishWalkLeaders(request.walk_id);
           await Promise.all(fileWrites);
           await update(ref(walksDb, "walk_requests/" + request.request_id), {
             status: "approved",
@@ -1374,6 +1382,46 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
     });
 
     /* ========================================================= DATA ========================================================= */
+    // Index used by the database rules: walk_leaders/{walkKey}/{leaderId} is true for the owner and each permitted leader.
+    // Rebuilt from the walk's current record after every change to the walk.
+    async function publishWalkLeaders(walkKey) {
+      const snap = await get(ref(walksDb, "walks/" + walkKey));
+      const w = snap.val();
+      const map = {};
+      if (w) {
+        const permitted = Array.isArray(w.permitted_leader_ids) ? w.permitted_leader_ids : String(w.permitted_leader_ids ?? "").split(",");
+        [w.owner_leader_id, ...permitted].map((id) => String(id ?? "").trim())
+          .filter((id) => id && id !== PLACEHOLDER_LEADER_ID)
+          .forEach((id) => { map[id] = true; });
+      }
+      await set(ref(walksDb, "walk_leaders/" + walkKey), Object.keys(map).length ? map : null);
+    }
+
+    // Leader view: the signed-in account's leader ID (leader_accounts/{uid}) says who is leading
+    async function identifyFromAccount(user) {
+      try {
+        const snap = await get(ref(walksDb, "leader_accounts/" + user.uid));
+        myLeaderId = snap.exists() ? String(snap.val()) : "";
+      } catch (err) {
+        console.error("Could not read leader account:", err);
+        myLeaderId = "";
+      }
+      renderAll();
+    }
+
+    // Request lists: staff read them all; a leader reads only the requests they made (the rules allow nothing else)
+    let stopRequests = null;
+    function subscribeRequests() {
+      if (stopRequests) { stopRequests(); stopRequests = null; }
+      if (VIEW !== "admin" && !myLeaderId) { requests = {}; renderAll(); return; }
+      const base = ref(walksDb, "walk_requests");
+      const source = VIEW === "admin" ? base : query(base, orderByChild("requested_by"), equalTo(String(myLeaderId)));
+      stopRequests = onValue(source, (snapshot) => {
+        requests = snapshot.val() || {};
+        renderAll();
+      }, (error) => console.error("Unable to load change requests:", error));
+    }
+
     function start() {
       setupPage();
       if (!walksDb) {
@@ -1390,19 +1438,15 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
         renderAll();
       }, (error) => console.error("Unable to load walks:", error));
 
-      onValue(ref(walksDb, "walk_requests"), (snapshot) => {
-        requests = snapshot.val() || {};
-        renderAll();
-      }, (error) => console.error("Unable to load change requests:", error));
+      subscribeRequests();
 
       // Leaders and walk bookings live in the calendar project. Both are read only here.
       if (bookingsDb) {
-        onValue(ref(bookingsDb, "leaders"), (snapshot) => {
+        onValue(ref(bookingsDb, "leader_names"), (snapshot) => {
           leaders = Object.values(snapshot.val() || {}).filter(Boolean)
             .sort((a, b) => Number(a.leader_id) - Number(b.leader_id));
-          if (leaders.length) applySavedLeaderEmail();
           renderAll();
-        }, (error) => console.error("Unable to load leaders:", error));
+        }, (error) => console.error("Unable to load leader names:", error));
 
         onValue(ref(bookingsDb, "walk_bookings"), (snapshot) => {
           bookings = snapshot.val() || {};
@@ -1411,14 +1455,20 @@ import { firebaseConfig as walksConfig } from "./firebase-config.js";
     }
 
     try {
-      const walksApp = initializeApp(walksConfig, "walksDatabase");
+      const walksApp = initializeApp(walksConfig, STAFF_APP_NAME);
       walksDb = getDatabase(walksApp);
       const auth = getAuth(walksApp);
       // Bookings and leaders now live in the same database as the walks, so they reuse this connection.
       bookingsDb = walksDb;
       const bookingsReady = Promise.resolve();
-      signInAnonymously(auth)
-        .then(() => bookingsReady)
+      ensureSignedIn(auth)
+        .then(async (user) => {
+          const wanted = allowedView(VIEW, await accountRoles(walksDb, user));
+          if (wanted !== VIEW) { redirectToView(wanted); return new Promise(() => {}); }
+          if (VIEW !== "walker") showStaffNotice(user);
+          if (isLeader && isStaff(user)) await identifyFromAccount(user);
+          return bookingsReady;
+        })
         .then(start)
         .catch((err) => {
           console.error("Anonymous sign-in failed:", err);
