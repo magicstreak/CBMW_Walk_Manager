@@ -1287,8 +1287,18 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
         .forEach((id) => { document.getElementById(id).value = "ALL"; });
       ["admin-filter-from", "admin-filter-to"]
         .forEach((id) => { document.getElementById(id).value = ""; });
+      if (currentView === "walker") {
+        // Also un-pick the day on the calendar (left-hand picker), the calendar day and the Day mode date
+        pickerDay = "";
+        selectedWalkerDate = null;
+        walkerDay = "";
+        const dayInput = document.getElementById("walker-day-input");
+        if (dayInput) dayInput.value = "";
+        syncWalkerRange();
+        updateWalkOffersTitle();
+        renderCalendar();
+      }
       renderAdminTable();
-      if (currentView === "walker") { syncWalkerRange(); updateWalkOffersTitle(); renderCalendar(); }
     });
 
     // Status toggle in the Walk Offers table: Draft <-> Live in one click
