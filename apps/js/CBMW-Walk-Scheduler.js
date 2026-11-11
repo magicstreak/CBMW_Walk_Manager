@@ -4059,7 +4059,10 @@ const authReady = Promise.allSettled(authSignIns).then((results) => {
       }
       function syncWalkerRange() {
         if (currentView !== "walker") return;
-        if (walkerMode === "list" || walkerMode === "map") {
+        // Map keeps the dates of the view it was opened from (e.g. a month), so the map matches the list.
+        // The From and To filters can then change them while the map is open.
+        if (walkerMode === "map") return;
+        if (walkerMode === "list") {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           setWalkerRange(modeIso(today), "");
