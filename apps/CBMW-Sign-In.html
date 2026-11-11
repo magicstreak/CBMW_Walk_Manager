@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CBMW Leaders Sign In</title>
+  <style>
+    :root { --ink:#1f2937; --muted:#6b7280; --line:#d1d5db; --brand:#2f6b3a; --bg:#f7f7f5; --card:#ffffff; --err:#b91c1c; --ok:#166534; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --brand:#6fbf7d; --bg:#111827; --card:#1f2937; --err:#fca5a5; --ok:#86efac; }
+    }
+    :root[data-theme="dark"] { --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --brand:#6fbf7d; --bg:#111827; --card:#1f2937; --err:#fca5a5; --ok:#86efac; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height:100vh; display:flex; align-items:flex-start; justify-content:center; padding:24px 16px; }
+    main { width:100%; max-width:380px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:24px; margin-top:24px; }
+    h1 { font-size:1.35rem; margin:0 0 4px; color:var(--brand); }
+    p.muted { color:var(--muted); margin:0 0 16px; font-size:.95rem; }
+    label { display:block; font-size:.9rem; margin:12px 0 4px; }
+    input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:1rem; background:transparent; color:var(--ink); }
+    button { width:100%; margin-top:16px; padding:11px; border:0; border-radius:8px; background:var(--brand); color:#fff; font-size:1rem; cursor:pointer; }
+    button.secondary { background:transparent; color:var(--brand); border:1px solid var(--line); }
+    button:disabled { opacity:.6; cursor:default; }
+    .link { background:none; border:0; color:var(--brand); padding:8px 0 0; margin-top:4px; width:auto; font-size:.95rem; text-decoration:underline; cursor:pointer; }
+    .msg { margin-top:12px; font-size:.95rem; min-height:1.2em; }
+    .msg.err { color:var(--err); }
+    .msg.ok { color:var(--ok); }
+    .hidden { display:none; }
+    .who { font-size:1rem; margin:0 0 12px; }
+    .tag { display:inline-block; font-size:.8rem; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); margin-left:6px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>CBMW Leaders</h1>
+
+  <div id="signed-out">
+    <p class="muted">Sign in with the email address we hold for you.</p>
+    <form id="sign-in-form" novalidate>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required />
+      <button type="submit" id="sign-in-btn">Sign in</button>
+    </form>
+    <button type="button" class="link" id="reset-btn">First time, or forgot your password? Email me a link to set one</button>
+    <div class="msg" id="msg-out" role="status"></div>
+  </div>
+
+  <div id="signed-in" class="hidden">
+    <p class="who" id="who"></p>
+    <p class="muted" id="role-line"></p>
+    <button type="button" class="secondary" id="sign-out-btn">Sign out</button>
+  </div>
+</main>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, sendPasswordResetEmail, signOut, onAuthStateChanged }
+    from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+  import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+  import { firebaseConfig } from "./js/firebase-config.js";
+
+  const app = initializeApp(firebaseConfig, "cbmwStaff"); // same name as the apps, so one sign-in covers all pages
+  const auth = getAuth(app);
+  const db = getDatabase(app);
+
+  const $ = (id) => document.getElementById(id);
+  const msg = (text, kind = "") => { const el = $("msg-out"); el.textContent = text; el.className = "msg " + kind; };
+
+  const friendly = (err) => {
+    const code = err?.code || "";
+    if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) return "That email and password don't match. Use the link below if this is your first time or you have forgotten your password.";
+    if (code.includes("too-many-requests")) return "Too many attempts. Please wait a few minutes and try again.";
+    if (code.includes("invalid-email")) return "That doesn't look like a valid email address.";
+    if (code.includes("network")) return "No connection. Check your internet and try again.";
+    return `Something went wrong (${code || "no code"}). Please try again, or contact the club.`;
+  };
+
+  // Safe reads: a failed read just means "unknown", never an error on screen
+  async function readOrNull(path) {
+    try { const snap = await get(ref(db, path)); return snap.exists() ? snap.val() : null; }
+    catch { return null; }
+  }
+
+  async function showWho(user) {
+    const uid = user.uid;
+    const link = await readOrNull(`leader_accounts/${uid}`);
+    const isAdmin = (await readOrNull(`admins/${uid}`)) === true;
+    const leader = link ? await readOrNull(`leaders/${link}`) : null;
+    const name = leader ? `${leader.first_name || ""} ${leader.surname || ""}`.trim() : "";
+    $("who").innerHTML = name ? `Signed in as ${name}` : "Signed in";
+    const roles = [];
+    if (name) roles.push("Leader"); else roles.push("No leader record linked to this account yet");
+    if (isAdmin) roles.push("Admin");
+    $("role-line").textContent = roles.join(" · ");
+  }
+
+  // Where to go after signing in. Only pages on this same site are allowed, so the link cannot send people elsewhere.
+  function safeNext() {
+    const next = new URLSearchParams(location.search).get("next") || "";
+    if (!next.startsWith("/") || next.startsWith("//")) return "";
+    try {
+      const url = new URL(next, location.origin);
+      return url.origin === location.origin ? url.pathname + url.search + url.hash : "";
+    } catch (e) { return ""; }
+  }
+
+  onAuthStateChanged(auth, (user) => {
+    if (user && !user.isAnonymous) {
+      const next = safeNext();
+      if (next) { location.replace(next); return; }
+      $("signed-out").classList.add("hidden");
+      $("signed-in").classList.remove("hidden");
+      showWho(user);
+    } else {
+      $("signed-in").classList.add("hidden");
+      $("signed-out").classList.remove("hidden");
+    }
+  });
+
+  $("sign-in-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = $("email").value.trim();
+    const password = $("password").value;
+    if (!email || !password) { msg("Please enter your email and password.", "err"); return; }
+    $("sign-in-btn").disabled = true;
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      msg("");
+    } catch (err) {
+      msg(friendly(err), "err");
+    } finally {
+      $("sign-in-btn").disabled = false;
+    }
+  });
+
+  $("reset-btn").addEventListener("click", async () => {
+    const email = $("email").value.trim();
+    if (!email) { msg("Type your email address above first, then press this button again.", "err"); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      // Same message whether or not the address is known, so this page cannot be used to check who has an account
+      msg("If that email is linked to a leader account, a link to set your password is on its way. Check your inbox and spam folder.", "ok");
+    } catch (err) {
+      msg(friendly(err), "err");
+    }
+  });
+
+  $("sign-out-btn").addEventListener("click", () => signOut(auth));
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CBMW Test Launcher</title>
+  <style>
+    :root { --ink:#1f2937; --muted:#6b7280; --line:#d1d5db; --brand:#2f6b3a; --bg:#f7f7f5; --card:#ffffff; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --brand:#6fbf7d; --bg:#111827; --card:#1f2937; }
+    }
+    :root[data-theme="dark"] { --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --brand:#6fbf7d; --bg:#111827; --card:#1f2937; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding:16px; }
+    main { max-width:720px; margin:0 auto; }
+    h1 { color:var(--brand); font-size:1.4rem; margin:8px 0 4px; }
+    p.muted { color:var(--muted); margin:0 0 14px; font-size:.95rem; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+    .who { font-weight:600; }
+    table { width:100%; border-collapse:collapse; font-size:.95rem; }
+    th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; }
+    a { color:var(--brand); }
+    .needs { font-size:.8rem; color:var(--muted); }
+    button { margin-top:10px; padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); cursor:pointer; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>CBMW Test Launcher</h1>
+  <p class="muted">Open each app in each view. Leader and admin views need a sign-in with the right account. Walker views work without one.</p>
+
+  <section class="card">
+    <div class="who" id="who">Checking sign-in…</div>
+    <p class="muted" id="role" style="margin:4px 0 0"></p>
+    <button type="button" id="sign-in-btn" class="hidden">Sign in</button>
+    <button type="button" id="sign-out-btn" class="hidden">Sign out</button>
+  </section>
+
+  <section class="card">
+    <table>
+      <thead>
+        <tr><th>App</th><th>Walker</th><th>Leader</th><th>Admin</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Walks Database</td>
+          <td><a href="./CBMW-Walks-Database.html?view=walker">Open</a></td>
+          <td><a href="./CBMW-Walks-Database.html?view=leader">Open</a><div class="needs">needs leader sign-in</div></td>
+          <td><a href="./CBMW-Walks-Database.html?view=admin">Open</a><div class="needs">needs admin sign-in</div></td>
+        </tr>
+        <tr>
+          <td>Walk Scheduler</td>
+          <td><a href="./CBMW-Walk-Scheduler.html?view=walker">Open</a></td>
+          <td><a href="./CBMW-Walk-Scheduler.html?view=leader">Open</a><div class="needs">needs leader sign-in</div></td>
+          <td><a href="./CBMW-Walk-Scheduler.html?view=admin">Open</a><div class="needs">needs admin sign-in</div></td>
+        </tr>
+        <tr>
+          <td>Leaders</td>
+          <td><a href="./CBMW-Leaders.html?view=walker">Open</a></td>
+          <td><a href="./CBMW-Leaders.html?view=leader">Open</a><div class="needs">needs leader sign-in</div></td>
+          <td><a href="./CBMW-Leaders.html?view=admin">Open</a><div class="needs">needs admin sign-in</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <p class="muted" style="margin:0">Expected results: walker links show the data with no notice. Leader and admin links show a green "Signed in as" line when you're signed in, and an orange sign-in notice when you're not. A leader account should not see admin-only buttons or be able to save another leader's walks.</p>
+  </section>
+</main>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+  import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+  import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+  import { firebaseConfig } from "./js/firebase-config.js";
+  import { STAFF_APP_NAME, isStaff } from "./js/cbmw-auth.js";
+
+  const $ = (id) => document.getElementById(id);
+  const app = initializeApp(firebaseConfig, STAFF_APP_NAME);
+  const auth = getAuth(app);
+  const db = getDatabase(app);
+
+  async function describe(user) {
+    if (!isStaff(user)) {
+      $("who").textContent = "Not signed in";
+      $("role").textContent = "Walker views only. Leader and admin links will show the sign-in notice.";
+      $("sign-in-btn").classList.remove("hidden");
+      $("sign-out-btn").classList.add("hidden");
+      return;
+    }
+    $("who").textContent = `Signed in as ${user.email}`;
+    $("sign-in-btn").classList.add("hidden");
+    $("sign-out-btn").classList.remove("hidden");
+    let leaderId = null, isAdmin = false;
+    try {
+      const link = await get(ref(db, "leader_accounts/" + user.uid));
+      leaderId = link.exists() ? link.val() : null;
+      const admin = await get(ref(db, "admins/" + user.uid));
+      isAdmin = admin.val() === true;
+    } catch (err) {
+      console.error("Could not read account roles:", err);
+    }
+    const roles = [];
+    roles.push(leaderId ? `Leader ${leaderId}` : "No leader record linked");
+    if (isAdmin) roles.push("Admin");
+    $("role").textContent = roles.join(" · ");
+  }
+
+  onAuthStateChanged(auth, (user) => describe(user));
+
+  $("sign-in-btn").addEventListener("click", () => {
+    location.href = "./CBMW-Sign-In.html?next=" + encodeURIComponent(location.pathname);
+  });
+  $("sign-out-btn").addEventListener("click", () => signOut(auth));
+</script>
+</body>
+</html>
